@@ -4,8 +4,9 @@ LICENSE: BSD3 (see LICENSE file)
 */
 use ::std::println;
 
+use crate::interface::delay::DelayMs;
 use crate::interface::{SensorInterface, PACKET_HEADER_LENGTH};
-use embedded_hal::blocking::delay::DelayMs;
+// use embedded_hal::blocking::delay::DelayMs;
 
 use core::ops::Shr;
 
@@ -104,7 +105,7 @@ where
     SE: core::fmt::Debug,
 {
     /// Consume all available messages on the port without processing them
-    pub fn eat_all_messages(&mut self, delay: &mut impl DelayMs<u8>) {
+    pub fn eat_all_messages(&mut self, delay: &mut impl DelayMs) {
         //#[cfg(feature = "rttdebug")]
         println!("eat_n");
         loop {
@@ -120,7 +121,7 @@ where
     /// Handle any messages with a timeout
     pub fn handle_all_messages(
         &mut self,
-        delay: &mut impl DelayMs<u8>,
+        delay: &mut impl DelayMs,
         timeout_ms: u8,
     ) -> u32 {
         let mut total_handled: u32 = 0;
@@ -140,7 +141,7 @@ where
     /// return the number of messages handled
     pub fn handle_one_message(
         &mut self,
-        delay: &mut impl DelayMs<u8>,
+        delay: &mut impl DelayMs,
         max_ms: u8,
     ) -> u32 {
         let mut msg_count = 0;
@@ -163,7 +164,7 @@ where
     /// Receive and ignore one message,
     /// returning the size of the packet received or zero
     /// if there was no packet to read.
-    pub fn eat_one_message(&mut self, delay: &mut impl DelayMs<u8>) -> usize {
+    pub fn eat_one_message(&mut self, delay: &mut impl DelayMs) -> usize {
         let res = self.receive_packet_with_timeout(delay, 150);
         return if let Ok(received_len) = res {
             //#[cfg(feature = "rttdebug")]
@@ -366,7 +367,7 @@ where
         } else {
             0
         };
-
+        println!("packet: {:?}", &self.packet_recv_buf[..received_len]);
         self.last_chan_received = chan_num;
         match chan_num {
             CHANNEL_COMMAND => match report_id {
@@ -451,7 +452,7 @@ where
     /// waiting for the application to configure it.
     pub fn init(
         &mut self,
-        delay_source: &mut impl DelayMs<u8>,
+        delay_source: &mut impl DelayMs,
     ) -> Result<(), WrapperError<SE>> {
         //#[cfg(feature = "rttdebug")]
         println!("wrapper init");
@@ -466,18 +467,24 @@ where
         if self.sensor_interface.requires_soft_reset() {
             delay_source.delay_ms(1u8);
             self.soft_reset()?;
-            delay_source.delay_ms(150u8);
+            delay_source.delay_ms(255u8);
             self.eat_all_messages(delay_source);
-            delay_source.delay_ms(50u8);
+            delay_source.delay_ms(255u8);
             self.eat_all_messages(delay_source);
         } else {
             // we only expect two messages after reset:
             // eat the advertisement response
-            self.eat_one_message(delay_source);
+            delay_source.delay_ms(255u8);
+            println!("Eating advertisement response");
+            self.handle_one_message(delay_source, 255u8);
+            println!("Eating reset response");
+            delay_source.delay_ms(255u8);
+            self.handle_one_message(delay_source, 255u8);
             // eat the unsolicited initialization response
-            self.eat_one_message(delay_source);
+            println!("Eating initialization response");
+            delay_source.delay_ms(255u8);
+            self.handle_one_message(delay_source, 255u8);
         }
-
         self.verify_product_id(delay_source)?;
         //self.eat_all_messages(delay_source);
 
@@ -545,7 +552,8 @@ where
         ];
 
         //we simply blast out this configuration command and assume it'll succeed
-        self.send_packet(CHANNEL_HUB_CONTROL, &cmd_body)?;
+        let size =
+            self.send_and_receive_packet(CHANNEL_HUB_CONTROL, &cmd_body)?;
         // any error or success in configuration will arrive some time later
 
         Ok(())
@@ -579,6 +587,7 @@ where
         body_data: &[u8],
     ) -> Result<usize, WrapperError<SE>> {
         let packet_length = self.prep_send_packet(channel, body_data);
+        println!("Sending {:?}", &self.packet_send_buf[..packet_length]);
         self.sensor_interface
             .write_packet(&self.packet_send_buf[..packet_length])
             .map_err(WrapperError::CommError)?;
@@ -588,11 +597,11 @@ where
     /// Read one packet into the receive buffer
     pub(crate) fn receive_packet_with_timeout(
         &mut self,
-        delay: &mut impl DelayMs<u8>,
+        delay: &mut impl DelayMs,
         max_ms: u8,
     ) -> Result<usize, WrapperError<SE>> {
         // //#[cfg(feature = "rttdebug")]
-        // println!("r_p");
+        println!("r_p");
 
         self.packet_recv_buf[0] = 0;
         self.packet_recv_buf[1] = 0;
@@ -603,7 +612,7 @@ where
 
         self.last_packet_len_received = packet_len;
         // //#[cfg(feature = "rttdebug")]
-        // println!("recv {}", packet_len);
+        println!("recv {}", packet_len);
 
         Ok(packet_len)
     }
@@ -611,7 +620,7 @@ where
     /// Verify that the sensor returns an expected chip ID
     fn verify_product_id(
         &mut self,
-        delay: &mut impl DelayMs<u8>,
+        delay: &mut impl DelayMs,
     ) -> Result<(), WrapperError<SE>> {
         //#[cfg(feature = "rttdebug")]
         println!("request PID...");
@@ -635,7 +644,6 @@ where
 
         // process all incoming messages until we get a product id (or no more data)
         while !self.prod_id_verified {
-            //#[cfg(feature = "rttdebug")]
             println!("read PID");
             let msg_count = self.handle_one_message(delay, 150u8);
             if msg_count < 1 {
@@ -677,7 +685,7 @@ where
     /// as it is called during `init`.
     pub fn soft_reset(&mut self) -> Result<(), WrapperError<SE>> {
         // //#[cfg(feature = "rttdebug")]
-        // println!("soft_reset");
+        println!("soft_reset");
         let data: [u8; 1] = [EXECUTABLE_DEVICE_CMD_RESET];
         // send command packet and ignore received packets
         let received_len =
@@ -697,7 +705,7 @@ where
     ) -> Result<usize, WrapperError<SE>> {
         let send_packet_length = self.prep_send_packet(channel, body_data);
         // //#[cfg(feature = "rttdebug")]
-        // println!("srcv {} ...", send_packet_length);
+        println!("srcv {:?} {} ...", &body_data, send_packet_length);
 
         let recv_packet_length = self
             .sensor_interface

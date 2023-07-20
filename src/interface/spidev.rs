@@ -1,6 +1,7 @@
 extern crate spidev;
 use spidev::{SpiModeFlags, Spidev, SpidevOptions, SpidevTransfer};
 use std::convert::TryInto;
+use std::io::Read as StdRead;
 use std::io::Write as StdWrite;
 use std::path::Path;
 use std::println;
@@ -36,6 +37,7 @@ impl SpiDevice {
             .bits_per_word(8)
             .max_speed_hz(20_000)
             .mode(SpiModeFlags::SPI_MODE_3)
+            .lsb_first(false)
             .build();
         spi.configure(&options)?;
 
@@ -49,10 +51,12 @@ impl Transfer for SpiDevice {
         &'a mut self,
         words: &'a mut [u8],
     ) -> Result<&[u8], Self::Error> {
-        // let mut rx_buf = vec![0_u8; words.len()].clone().as_mut_slice();
-        // let mut transfer = SpidevTransfer::read_write(words, rx_buf);
-        // self.spi.transfer(&mut transfer)?;
-        // words.clone_from_slice(rx_buf);
+        // let mut rx_buf = vec![0_u8; words.len()];
+        // let mut buf = rx_buf.as_mut();
+        let mut transfer = SpidevTransfer::write(words);
+        self.spi.transfer(&mut transfer)?;
+        transfer = SpidevTransfer::read(words);
+        self.spi.transfer(&mut transfer)?;
         Ok(words)
     }
 }
@@ -60,7 +64,11 @@ impl Transfer for SpiDevice {
 impl Write for SpiDevice {
     type Error = io::Error;
     fn write(&mut self, words: &[u8]) -> Result<(), Self::Error> {
-        self.spi.write(&words.clone());
+        let mut transfer = SpidevTransfer::write(words);
+        self.spi.transfer(&mut transfer)?;
+
+        // self.spi.write(words)?;
+        // self.spi.read(&mut buf)?;
         Ok(())
     }
 }

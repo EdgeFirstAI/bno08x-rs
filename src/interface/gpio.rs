@@ -76,7 +76,7 @@ pub struct GpiodOut {
     output: Lines<Output>,
 }
 impl GpiodOut {
-    pub fn new(chip: Chip, pin: u32) -> io::Result<GpiodOut> {
+    pub fn new(chip: &Chip, pin: u32) -> io::Result<GpiodOut> {
         let opts = Options::output([pin]) // configure lines offsets
             .values([false]) // optionally set initial values
             .consumer("my-outputs"); // optionally set consumer string
@@ -104,7 +104,7 @@ pub struct GpiodIn {
     input: Lines<Input>,
 }
 impl GpiodIn {
-    pub fn new(chip: Chip, pin: u32) -> io::Result<GpiodIn> {
+    pub fn new(chip: &Chip, pin: u32) -> io::Result<GpiodIn> {
         let opts = Options::input([pin]) // configure lines offsets
             .consumer("my-outputs"); // optionally set consumer string
 

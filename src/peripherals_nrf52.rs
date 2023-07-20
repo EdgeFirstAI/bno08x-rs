@@ -64,7 +64,7 @@
 // }
 
 // pub fn setup_peripherals(
-// ) -> (UserLed1Type, impl DelayMs<u8>, ImuI2cPortType, BnoSpi1Lines) {
+// ) -> (UserLed1Type, impl DelayMs, ImuI2cPortType, BnoSpi1Lines) {
 //     let cp = pac::CorePeripherals::take().unwrap();
 //     let delay_source = Delay::new(cp.SYST);
 

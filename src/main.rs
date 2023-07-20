@@ -1,9 +1,14 @@
-extern crate gpiod;
-extern crate spidev;
+use bno080::interface::{
+    delay::{DelayMs, TimerMs},
+    gpio::{GpiodIn, GpiodOut},
+    spi::SpiControlLines,
+    spidev::{SpiDevice, Transfer, Write},
+    SpiInterface,
+};
+use bno080::wrapper::BNO080;
 use gpiod::{AsValuesMut, Chip, EdgeDetect, Masked, Options};
 use spidev::{SpiModeFlags, Spidev, SpidevOptions, SpidevTransfer};
-use std::io::prelude::*;
-
+use std::io::{self, prelude::*};
 // use bno080::wrapper::BNO080;
 // // use bno080::interface::{I2cInterface, SpiInterface};
 // use embedded_hal::blocking::delay::DelayMs;
@@ -58,4 +63,38 @@ use std::io::prelude::*;
 //     }
 // }
 
-fn main() {}
+fn main() -> io::Result<()> {
+    let mut chip = Chip::new("/dev/gpiochip5")?; // open chip
+    let mut spi = SpiDevice::new("/dev/spidev1.0")?;
+
+    // let mut buf_rx = [6, 0, 2, 0, 249, 0];
+    // println!("{:?}", spi.transfer(buf_rx.as_mut()));
+
+    let ctrl_lines: SpiControlLines<SpiDevice, GpiodIn, GpiodOut> =
+        SpiControlLines::<SpiDevice, GpiodIn, GpiodOut> {
+            spi: spi,
+            // csn: (),
+            hintn: GpiodIn::new(&chip, 2)?,
+            reset: GpiodOut::new(&chip, 0)?,
+        };
+
+    let spi_int = SpiInterface::new(ctrl_lines);
+
+    let mut delay_source = TimerMs {};
+
+    let mut imu_driver = BNO080::new_with_interface(spi_int);
+    imu_driver.init(&mut delay_source).unwrap();
+    imu_driver.enable_rotation_vector(50).unwrap();
+
+    let loop_interval = 50 as u8;
+    println!("loop_interval: {}", loop_interval);
+
+    loop {
+        let _msg_count =
+            imu_driver.handle_all_messages(&mut delay_source, 10u8);
+        if _msg_count > 0 {
+            println!("> {}", _msg_count);
+        }
+        delay_source.delay_ms(50);
+    }
+}

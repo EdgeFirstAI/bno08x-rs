@@ -1,12 +1,10 @@
-use embedded_hal;
-
 use super::SensorInterface;
+use crate::interface::delay::DelayMs;
 use crate::interface::gpio::{InputPin, OutputPin};
+use crate::interface::spidev::{SpiDevice, Transfer, Write};
 use crate::interface::{SensorCommon, PACKET_HEADER_LENGTH};
 use crate::Error;
 use crate::Error::SensorUnresponsive;
-use embedded_hal::blocking::delay::DelayMs;
-use embedded_hal::blocking::spi::{Transfer, Write};
 
 //#[cfg(feature = "rttdebug")]
 // use panic_rtt_core::println;
@@ -19,36 +17,37 @@ use ::std::println;
 /// - CSN: chip select line that selects the device on the shared SPI bus
 /// - HINTN: Hardware Interrupt. Sensor uses this to indicate it had data available for read
 /// - RSTN: Reset the device
-pub struct SpiControlLines<SPI, CSN, IN, RSTN> {
-    pub spi: SPI,    // the spidev read/write
-    pub csn: CSN,    // chip select pin, SPI_CS
+pub struct SpiControlLines<SPI, /* CSN, */ IN, RSTN> {
+    pub spi: SPI, // the spidev read/write
+    // pub csn: CSN,    // chip select pin, SPI_CS
     pub hintn: IN,   // interrupt, IMU_INT
     pub reset: RSTN, // reset, IMU_RST
 }
 
 /// This combines the SPI peripheral and associated control pins
 ///
-pub struct SpiInterface<SPI, CSN, IN, RSTN> {
+pub struct SpiInterface<SPI, /* CSN, */ IN, RSTN> {
     spi: SPI,
-    csn: CSN,
+    // csn: CSN,
     hintn: IN,
     reset: RSTN,
     received_packet_count: usize,
 }
 
-impl<SPI, CSN, IN, RSTN, CommE, PinE> SpiInterface<SPI, CSN, IN, RSTN>
+impl<SPI, /* CSN,  */ IN, RSTN, CommE, PinE>
+    SpiInterface<SPI, /* CSN,  */ IN, RSTN>
 where
-    SPI: Write<u8, Error = CommE> + Transfer<u8, Error = CommE>,
-    CSN: OutputPin<Error = PinE>,
+    SPI: Write<Error = CommE> + Transfer<Error = CommE>,
+    // CSN: OutputPin<Error = PinE>,
     IN: InputPin<Error = PinE>,
     RSTN: OutputPin<Error = PinE>,
     CommE: core::fmt::Debug,
     PinE: core::fmt::Debug,
 {
-    pub fn new(lines: SpiControlLines<SPI, CSN, IN, RSTN>) -> Self {
+    pub fn new(lines: SpiControlLines<SPI, /* CSN, */ IN, RSTN>) -> Self {
         Self {
             spi: lines.spi,
-            csn: lines.csn,
+            // csn: lines.csn,
             hintn: lines.hintn,
             reset: lines.reset,
             received_packet_count: 0,
@@ -68,7 +67,7 @@ where
     /// `max_ms` maximum milliseconds to await for HINTN change
     fn wait_for_sensor_awake(
         &mut self,
-        delay_source: &mut impl DelayMs<u8>,
+        delay_source: &mut impl DelayMs,
         max_ms: u8,
     ) -> bool {
         for _ in 0..max_ms {
@@ -104,12 +103,12 @@ where
         if (packet_len > PACKET_HEADER_LENGTH) && (packet_len < recv_buf.len())
         {
             //exchange 0xFF bytes for whatever the sensor is sending
-            for w in recv_buf[PACKET_HEADER_LENGTH..packet_len].iter_mut() {
+            for w in recv_buf[..packet_len + PACKET_HEADER_LENGTH].iter_mut() {
                 *w = 0xFF;
             }
             let rc = self
                 .spi
-                .transfer(&mut recv_buf[PACKET_HEADER_LENGTH..packet_len]);
+                .transfer(&mut recv_buf[..packet_len + PACKET_HEADER_LENGTH]);
             if rc.is_err() {
                 packet_len = 0;
             }
@@ -121,12 +120,11 @@ where
     }
 }
 
-impl<SPI, CSN, IN, RS, CommE, PinE> SensorInterface
-    for SpiInterface<SPI, CSN, IN, RS>
+impl<SPI, /* CSN, */ IN, RS, CommE, PinE> SensorInterface
+    for SpiInterface<SPI, /* CSN, */ IN, RS>
 where
-    SPI: embedded_hal::blocking::spi::Write<u8, Error = CommE>
-        + embedded_hal::blocking::spi::Transfer<u8, Error = CommE>,
-    CSN: OutputPin<Error = PinE>,
+    SPI: Write<Error = CommE> + Transfer<Error = CommE>,
+    // CSN: OutputPin<Error = PinE>,
     IN: InputPin<Error = PinE>,
     RS: OutputPin<Error = PinE>,
     CommE: core::fmt::Debug,
@@ -140,17 +138,17 @@ where
 
     fn setup(
         &mut self,
-        delay_source: &mut impl DelayMs<u8>,
+        delay_source: &mut impl DelayMs,
     ) -> Result<(), Self::SensorError> {
         // Deselect sensor
-        self.csn.set_high().map_err(Error::Pin)?;
+        // self.csn.set_high().map_err(Error::Pin)?;
         // Note: This assumes that WAK/PS0 is set to high already
         //TODO allow the user to provide a WAK pin
         // should already be high by default, but just in case...
         self.reset.set_high().map_err(Error::Pin)?;
 
         // //#[cfg(feature = "rttdebug")]
-        // println!("reset cycle... ");
+        println!("reset cycle... ");
         // reset cycle
 
         self.reset.set_low().map_err(Error::Pin)?;
@@ -173,16 +171,20 @@ where
         send_buf: &[u8],
         recv_buf: &mut [u8],
     ) -> Result<usize, Self::SensorError> {
+        // self.write_packet(&send_buf)?;
+        // let packet_len = self.read_packet(recv_buf)?;
+        // Ok(packet_len)
+
         // select the sensor
-        self.csn.set_low().map_err(Error::Pin)?;
+        // self.csn.set_low().map_err(Error::Pin)?;
         let rc = self.spi.write(&send_buf).map_err(Error::Comm);
-        self.csn.set_high().map_err(Error::Pin)?;
+        // self.csn.set_high().map_err(Error::Pin)?;
         if rc.is_err() {
             //release the sensor
             return Err(rc.unwrap_err());
         }
         //#[cfg(feature = "rttdebug")]
-        println!("sent {}", send_buf.len());
+        println!("sent {:?} {}", send_buf, send_buf.len());
 
         //zero the receive buffer
         for i in recv_buf[..PACKET_HEADER_LENGTH].iter_mut() {
@@ -195,25 +197,25 @@ where
             println!("no packet to read?");
             return Ok(0);
         }
-
-        self.csn.set_low().map_err(Error::Pin)?;
+        // self.csn.set_low().map_err(Error::Pin)?;
         // get just the header
         let rc = self
             .spi
             .transfer(&mut recv_buf[..PACKET_HEADER_LENGTH])
             .map_err(Error::Comm);
+        println!("rc1: {:?}", rc);
         if rc.is_err() {
             //release the sensor
             //#[cfg(feature = "rttdebug")]
             println!("transfer err: {:?}", rc);
-            self.csn.set_high().map_err(Error::Pin)?;
+            // self.csn.set_high().map_err(Error::Pin)?;
             return Err(rc.unwrap_err());
         }
 
         let packet_len = self.read_packet_cargo(recv_buf);
-
+        println!("packet is: {:?}", &recv_buf[..packet_len]);
         //release the sensor
-        self.csn.set_high().map_err(Error::Pin)?;
+        // self.csn.set_high().map_err(Error::Pin)?;
 
         if packet_len > 0 {
             self.received_packet_count += 1;
@@ -223,9 +225,9 @@ where
     }
 
     fn write_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError> {
-        self.csn.set_low().map_err(Error::Pin)?;
+        // self.csn.set_low().map_err(Error::Pin)?;
         let rc = self.spi.write(&packet).map_err(Error::Comm);
-        self.csn.set_high().map_err(Error::Pin)?;
+        // self.csn.set_high().map_err(Error::Pin)?;
 
         if rc.is_err() {
             return Err(rc.unwrap_err());
@@ -246,9 +248,11 @@ where
         for i in recv_buf[..PACKET_HEADER_LENGTH].iter_mut() {
             *i = 0;
         }
-
+        // self.spi
+        //     .transfer(&mut recv_buf[..PACKET_HEADER_LENGTH])
+        //     .map_err(Error::<CommE, PinE>::Comm);
         // grab this sensor
-        self.csn.set_low().map_err(Error::Pin)?;
+        // self.csn.set_low().map_err(Error::Pin)?;
         // get just the header
         let rc = self
             .spi
@@ -257,14 +261,14 @@ where
 
         if rc.is_err() {
             //release the sensor
-            self.csn.set_high().map_err(Error::Pin)?;
+            // self.csn.set_high().map_err(Error::Pin)?;
             return Err(rc.unwrap_err());
         }
-
+        println!("rc: {:?}", rc);
         let packet_len = self.read_packet_cargo(recv_buf);
-
+        println!("recv_buf: {:?}", &recv_buf[..packet_len]);
         //release the sensor
-        self.csn.set_high().map_err(Error::Pin)?;
+        // self.csn.set_high().map_err(Error::Pin)?;
 
         if packet_len > 0 {
             self.received_packet_count += 1;
@@ -276,7 +280,7 @@ where
     fn read_with_timeout(
         &mut self,
         recv_buf: &mut [u8],
-        delay_source: &mut impl DelayMs<u8>,
+        delay_source: &mut impl DelayMs,
         max_ms: u8,
     ) -> Result<usize, Self::SensorError> {
         if self.wait_for_sensor_awake(delay_source, max_ms) {

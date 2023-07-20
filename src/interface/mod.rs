@@ -4,9 +4,9 @@ pub mod gpio;
 pub mod spi;
 pub mod spidev;
 
+use crate::interface::delay::DelayMs;
 use core::ops::Shl;
-
-use embedded_hal::blocking::delay::DelayMs;
+// use embedded_hal::blocking::delay::DelayMs;
 
 //#[cfg(feature = "rttdebug")]
 // use panic_rtt_core::println;
@@ -20,7 +20,7 @@ pub trait SensorInterface {
     /// give the sensor interface a chance to set up
     fn setup(
         &mut self,
-        delay_source: &mut impl DelayMs<u8>,
+        delay_source: &mut impl DelayMs,
     ) -> Result<(), Self::SensorError>;
 
     /// Write the whole packet provided
@@ -38,7 +38,7 @@ pub trait SensorInterface {
     fn read_with_timeout(
         &mut self,
         recv_buf: &mut [u8],
-        delay_source: &mut impl DelayMs<u8>,
+        delay_source: &mut impl DelayMs,
         max_ms: u8,
     ) -> Result<usize, Self::SensorError>;
 
@@ -88,7 +88,11 @@ impl SensorCommon {
                 packet_len
             );
         } else {
-            // hprintln!("pph: {:?} {} ", &packet[..PACKET_HEADER_LENGTH], packet_len).unwrap();
+            println!(
+                "pph: {:?} {} ",
+                &packet[..PACKET_HEADER_LENGTH],
+                packet_len
+            )
         }
 
         packet_len
