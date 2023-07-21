@@ -149,25 +149,37 @@ where
         for i in recv_buf[..].iter_mut() {
             *i = 0;
         }
+
+        let mut tmp = &mut [0u8; PACKET_HEADER_LENGTH];
+        // check how long the message to read is
+        let mut read_packet_len = 0;
+        let rc = self.spi.transfer(&mut tmp[..]);
+        if !rc.is_err() {
+            read_packet_len =
+                SensorCommon::parse_packet_header(&tmp[..PACKET_HEADER_LENGTH]);
+        }
+
         // Copy the write message into the buffer
         for i in 0..send_buf.len() {
             recv_buf[i] = send_buf[i];
         }
-
-        let rc = self.spi.transfer(&mut recv_buf[..]);
-
-        let mut packet_len = 0;
+        let total_packet_len = std::cmp::max(read_packet_len, send_buf.len());
+        if (total_packet_len > recv_buf.len()) {
+            // TODO: throw Err()
+            eprintln!("Total packet length greater than recv buffer size");
+        }
+        let rc = self.spi.transfer(&mut recv_buf[..total_packet_len]);
         if !rc.is_err() {
-            packet_len = SensorCommon::parse_packet_header(
+            read_packet_len = SensorCommon::parse_packet_header(
                 &recv_buf[..PACKET_HEADER_LENGTH],
             );
         }
-        println!("recv_buf: {:?}", &recv_buf[..packet_len]);
+        // println!("recv_buf: {:?}", &recv_buf[..read_packet_len]);
 
-        if packet_len > 0 {
+        if read_packet_len > 0 {
             self.received_packet_count += 1;
         }
-        Ok(packet_len)
+        Ok(read_packet_len)
         // self.write_packet(send_buf)?;
 
         // if !self.block_on_hintn(1000) {
@@ -198,24 +210,35 @@ where
         // Note: HINTN cannot always be used to detect data ready.
         // As soon as host selects CSN, HINTN resets
 
-        //zero the receive buffer
-        for i in recv_buf[..].iter_mut() {
+        // check how long the message to read is
+        let mut read_packet_len = 0;
+        for i in recv_buf[..PACKET_HEADER_LENGTH].iter_mut() {
             *i = 0;
         }
-        let mut packet_len = 0;
-        let rc = self.spi.transfer(&mut recv_buf[..]);
+        let rc = self.spi.transfer(&mut recv_buf[..PACKET_HEADER_LENGTH]);
         if !rc.is_err() {
-            packet_len = SensorCommon::parse_packet_header(
+            read_packet_len = SensorCommon::parse_packet_header(
                 &recv_buf[..PACKET_HEADER_LENGTH],
             );
         }
-        println!("recv_buf: {:?}", &recv_buf[..packet_len]);
 
-        if packet_len > 0 {
+        //zero the receive buffer
+        for i in recv_buf[..read_packet_len].iter_mut() {
+            *i = 0;
+        }
+        let rc = self.spi.transfer(&mut recv_buf[..read_packet_len]);
+        if !rc.is_err() {
+            read_packet_len = SensorCommon::parse_packet_header(
+                &recv_buf[..PACKET_HEADER_LENGTH],
+            );
+        }
+        // println!("recv_buf: {:?}", &recv_buf[..read_packet_len]);
+
+        if read_packet_len > 0 {
             self.received_packet_count += 1;
         }
 
-        Ok(packet_len)
+        Ok(read_packet_len)
     }
 
     fn read_with_timeout(
@@ -227,7 +250,7 @@ where
         if self.wait_for_sensor_awake(delay_source, max_ms) {
             return self.read_packet(recv_buf);
         }
-        println!("Sensor did not wake for read");
+        // println!("Sensor did not wake for read");
         Ok(0)
     }
 }

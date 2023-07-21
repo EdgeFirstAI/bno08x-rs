@@ -367,7 +367,7 @@ where
         } else {
             0
         };
-        println!("packet: {:?}", &self.packet_recv_buf[..received_len]);
+        // println!("packet: {:?}", &self.packet_recv_buf[..received_len]);
         self.last_chan_received = chan_num;
         match chan_num {
             CHANNEL_COMMAND => match report_id {
@@ -603,7 +603,7 @@ where
         max_ms: u8,
     ) -> Result<usize, WrapperError<SE>> {
         // //#[cfg(feature = "rttdebug")]
-        println!("r_p");
+        // println!("r_p");
 
         self.packet_recv_buf[0] = 0;
         self.packet_recv_buf[1] = 0;
@@ -614,7 +614,7 @@ where
 
         self.last_packet_len_received = packet_len;
         // //#[cfg(feature = "rttdebug")]
-        println!("recv {}", packet_len);
+        // println!("recv {}", packet_len);
 
         Ok(packet_len)
     }
