@@ -482,9 +482,11 @@ where
             self.handle_one_message(delay_source, 255u8);
             // eat the unsolicited initialization response
             println!("Eating initialization response");
-            delay_source.delay_ms(255u8);
-            self.handle_one_message(delay_source, 255u8);
+            // delay_source.delay_ms(255u8);
+            // self.handle_one_message(delay_source, 255u8);
         }
+        // delay_source.delay_ms(255u8);
+        // self.eat_all_messages(delay_source);
         self.verify_product_id(delay_source)?;
         //self.eat_all_messages(delay_source);
 

@@ -84,17 +84,18 @@ fn main() -> io::Result<()> {
 
     let mut imu_driver = BNO080::new_with_interface(spi_int);
     imu_driver.init(&mut delay_source).unwrap();
-    imu_driver.enable_rotation_vector(50).unwrap();
+    imu_driver.enable_rotation_vector(25).unwrap();
 
     let loop_interval = 50 as u8;
     println!("loop_interval: {}", loop_interval);
 
     loop {
         let _msg_count =
-            imu_driver.handle_all_messages(&mut delay_source, 10u8);
+            imu_driver.handle_all_messages(&mut delay_source, 50u8);
         if _msg_count > 0 {
             println!("> {}", _msg_count);
         }
-        delay_source.delay_ms(50);
+        delay_source.delay_ms(loop_interval);
+        println!("Current rotation: {:?}", imu_driver.rotation_quaternion());
     }
 }

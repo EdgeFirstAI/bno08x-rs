@@ -51,12 +51,17 @@ impl Transfer for SpiDevice {
         &'a mut self,
         words: &'a mut [u8],
     ) -> Result<&[u8], Self::Error> {
-        // let mut rx_buf = vec![0_u8; words.len()];
-        // let mut buf = rx_buf.as_mut();
-        let mut transfer = SpidevTransfer::write(words);
+        // println!("Transfer write: {:?}", words);
+        let mut rx_buf = vec![0_u8; words.len()];
+        let mut buf = rx_buf.as_mut();
+        let mut transfer = SpidevTransfer::read_write(words, buf);
         self.spi.transfer(&mut transfer)?;
-        transfer = SpidevTransfer::read(words);
-        self.spi.transfer(&mut transfer)?;
+        // // self.spi.write(words)?;
+        // // self.spi.read(&mut buf)?;
+
+        // self.spi.read(&mut buf)?;
+        words.clone_from_slice(buf);
+        // println!("Transfer read: {:?}", words);
         Ok(words)
     }
 }
@@ -64,8 +69,13 @@ impl Transfer for SpiDevice {
 impl Write for SpiDevice {
     type Error = io::Error;
     fn write(&mut self, words: &[u8]) -> Result<(), Self::Error> {
-        let mut transfer = SpidevTransfer::write(words);
+        let mut rx_buf = vec![0_u8; words.len()];
+        let mut buf = rx_buf.as_mut();
+        let mut transfer = SpidevTransfer::read_write(words, buf);
         self.spi.transfer(&mut transfer)?;
+        // self.spi.write(words)?;
+        // self.spi.read(&mut buf)?;
+        // println!("Write read: {:?}", buf);
 
         // self.spi.write(words)?;
         // self.spi.read(&mut buf)?;

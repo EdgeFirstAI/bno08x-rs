@@ -92,32 +92,6 @@ where
 
         false
     }
-
-    /// read the body ("cargo" or "payload") of a packet,
-    /// return the total packet length read
-    fn read_packet_cargo(&mut self, recv_buf: &mut [u8]) -> usize {
-        let mut packet_len = SensorCommon::parse_packet_header(
-            &recv_buf[..PACKET_HEADER_LENGTH],
-        );
-        // now get the body
-        if (packet_len > PACKET_HEADER_LENGTH) && (packet_len < recv_buf.len())
-        {
-            //exchange 0xFF bytes for whatever the sensor is sending
-            for w in recv_buf[..packet_len + PACKET_HEADER_LENGTH].iter_mut() {
-                *w = 0xFF;
-            }
-            let rc = self
-                .spi
-                .transfer(&mut recv_buf[..packet_len + PACKET_HEADER_LENGTH]);
-            if rc.is_err() {
-                packet_len = 0;
-            }
-        } else {
-            packet_len = 0;
-        }
-
-        packet_len
-    }
 }
 
 impl<SPI, /* CSN, */ IN, RS, CommE, PinE> SensorInterface
@@ -171,64 +145,44 @@ where
         send_buf: &[u8],
         recv_buf: &mut [u8],
     ) -> Result<usize, Self::SensorError> {
-        // self.write_packet(&send_buf)?;
-        // let packet_len = self.read_packet(recv_buf)?;
-        // Ok(packet_len)
-
-        // select the sensor
-        // self.csn.set_low().map_err(Error::Pin)?;
-        let rc = self.spi.write(&send_buf).map_err(Error::Comm);
-        // self.csn.set_high().map_err(Error::Pin)?;
-        if rc.is_err() {
-            //release the sensor
-            return Err(rc.unwrap_err());
-        }
-        //#[cfg(feature = "rttdebug")]
-        println!("sent {:?} {}", send_buf, send_buf.len());
-
         //zero the receive buffer
-        for i in recv_buf[..PACKET_HEADER_LENGTH].iter_mut() {
+        for i in recv_buf[..].iter_mut() {
             *i = 0;
         }
-
-        if !self.block_on_hintn(1000) {
-            //no packet to be read
-            //#[cfg(feature = "rttdebug")]
-            println!("no packet to read?");
-            return Ok(0);
-        }
-        // self.csn.set_low().map_err(Error::Pin)?;
-        // get just the header
-        let rc = self
-            .spi
-            .transfer(&mut recv_buf[..PACKET_HEADER_LENGTH])
-            .map_err(Error::Comm);
-        println!("rc1: {:?}", rc);
-        if rc.is_err() {
-            //release the sensor
-            //#[cfg(feature = "rttdebug")]
-            println!("transfer err: {:?}", rc);
-            // self.csn.set_high().map_err(Error::Pin)?;
-            return Err(rc.unwrap_err());
+        // Copy the write message into the buffer
+        for i in 0..send_buf.len() {
+            recv_buf[i] = send_buf[i];
         }
 
-        let packet_len = self.read_packet_cargo(recv_buf);
-        println!("packet is: {:?}", &recv_buf[..packet_len]);
-        //release the sensor
-        // self.csn.set_high().map_err(Error::Pin)?;
+        let rc = self.spi.transfer(&mut recv_buf[..]);
+
+        let mut packet_len = 0;
+        if !rc.is_err() {
+            packet_len = SensorCommon::parse_packet_header(
+                &recv_buf[..PACKET_HEADER_LENGTH],
+            );
+        }
+        println!("recv_buf: {:?}", &recv_buf[..packet_len]);
 
         if packet_len > 0 {
             self.received_packet_count += 1;
         }
-
         Ok(packet_len)
+        // self.write_packet(send_buf)?;
+
+        // if !self.block_on_hintn(1000) {
+        //     //no packet to be read
+        //     //#[cfg(feature = "rttdebug")]
+        //     println!("no packet to read?");
+        //     return Ok(0);
+        // }
+        // self.read_packet(recv_buf)
     }
 
     fn write_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError> {
         // self.csn.set_low().map_err(Error::Pin)?;
         let rc = self.spi.write(&packet).map_err(Error::Comm);
         // self.csn.set_high().map_err(Error::Pin)?;
-
         if rc.is_err() {
             return Err(rc.unwrap_err());
         }
@@ -244,31 +198,18 @@ where
         // Note: HINTN cannot always be used to detect data ready.
         // As soon as host selects CSN, HINTN resets
 
-        //Zero the header bytes are zeroed since we're not sending any data
-        for i in recv_buf[..PACKET_HEADER_LENGTH].iter_mut() {
+        //zero the receive buffer
+        for i in recv_buf[..].iter_mut() {
             *i = 0;
         }
-        // self.spi
-        //     .transfer(&mut recv_buf[..PACKET_HEADER_LENGTH])
-        //     .map_err(Error::<CommE, PinE>::Comm);
-        // grab this sensor
-        // self.csn.set_low().map_err(Error::Pin)?;
-        // get just the header
-        let rc = self
-            .spi
-            .transfer(&mut recv_buf[..PACKET_HEADER_LENGTH])
-            .map_err(Error::Comm);
-
-        if rc.is_err() {
-            //release the sensor
-            // self.csn.set_high().map_err(Error::Pin)?;
-            return Err(rc.unwrap_err());
+        let mut packet_len = 0;
+        let rc = self.spi.transfer(&mut recv_buf[..]);
+        if !rc.is_err() {
+            packet_len = SensorCommon::parse_packet_header(
+                &recv_buf[..PACKET_HEADER_LENGTH],
+            );
         }
-        println!("rc: {:?}", rc);
-        let packet_len = self.read_packet_cargo(recv_buf);
         println!("recv_buf: {:?}", &recv_buf[..packet_len]);
-        //release the sensor
-        // self.csn.set_high().map_err(Error::Pin)?;
 
         if packet_len > 0 {
             self.received_packet_count += 1;
@@ -286,6 +227,7 @@ where
         if self.wait_for_sensor_awake(delay_source, max_ms) {
             return self.read_packet(recv_buf);
         }
+        println!("Sensor did not wake for read");
         Ok(0)
     }
 }
