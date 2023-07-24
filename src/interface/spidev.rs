@@ -1,10 +1,10 @@
 extern crate spidev;
+use crate::log;
 use spidev::{SpiModeFlags, Spidev, SpidevOptions, SpidevTransfer};
 use std::convert::TryInto;
 use std::io::Read as StdRead;
 use std::io::Write as StdWrite;
 use std::path::Path;
-use std::println;
 use std::{io, vec};
 /// Blocking transfer
 pub trait Transfer {
@@ -51,17 +51,12 @@ impl Transfer for SpiDevice {
         &'a mut self,
         words: &'a mut [u8],
     ) -> Result<&[u8], Self::Error> {
-        // println!("Transfer write: {:?}", words);
         let mut rx_buf = vec![0_u8; words.len()];
         let mut buf = rx_buf.as_mut();
         let mut transfer = SpidevTransfer::read_write(words, buf);
         self.spi.transfer(&mut transfer)?;
-        // // self.spi.write(words)?;
-        // // self.spi.read(&mut buf)?;
-
-        // self.spi.read(&mut buf)?;
         words.clone_from_slice(buf);
-        // println!("Transfer read: {:?}", words);
+        // log!("Transfer read: {:?}", words);
         Ok(words)
     }
 }
@@ -73,12 +68,7 @@ impl Write for SpiDevice {
         let mut buf = rx_buf.as_mut();
         let mut transfer = SpidevTransfer::read_write(words, buf);
         self.spi.transfer(&mut transfer)?;
-        // self.spi.write(words)?;
-        // self.spi.read(&mut buf)?;
-        // println!("Write read: {:?}", buf);
-
-        // self.spi.write(words)?;
-        // self.spi.read(&mut buf)?;
+        // log!("Write read: {:?}", buf);
         Ok(())
     }
 }

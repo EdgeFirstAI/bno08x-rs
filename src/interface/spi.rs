@@ -6,9 +6,7 @@ use crate::interface::{SensorCommon, PACKET_HEADER_LENGTH};
 use crate::Error;
 use crate::Error::SensorUnresponsive;
 
-//#[cfg(feature = "rttdebug")]
-// use panic_rtt_core::println;
-use ::std::println;
+use crate::log;
 
 /// Encapsulates all the lines required to operate this sensor
 /// - SCK: clock line from master
@@ -87,8 +85,8 @@ where
                 return true;
             }
         }
-        //#[cfg(feature = "rttdebug")]
-        println!("no hintn??");
+
+        log!("no hintn??");
 
         false
     }
@@ -121,8 +119,7 @@ where
         // should already be high by default, but just in case...
         self.reset.set_high().map_err(Error::Pin)?;
 
-        // //#[cfg(feature = "rttdebug")]
-        println!("reset cycle... ");
+        log!("reset cycle... ");
         // reset cycle
 
         self.reset.set_low().map_err(Error::Pin)?;
@@ -132,8 +129,7 @@ where
         // wait for sensor to set hintn pin after reset
         let ready = self.wait_for_sensor_awake(delay_source, 200u8);
         if !ready {
-            //#[cfg(feature = "rttdebug")]
-            println!("sensor not ready");
+            eprintln!("Setup: sensor not ready");
             return Err(SensorUnresponsive);
         }
 
@@ -174,27 +170,15 @@ where
                 &recv_buf[..PACKET_HEADER_LENGTH],
             );
         }
-        // println!("recv_buf: {:?}", &recv_buf[..read_packet_len]);
 
         if read_packet_len > 0 {
             self.received_packet_count += 1;
         }
         Ok(read_packet_len)
-        // self.write_packet(send_buf)?;
-
-        // if !self.block_on_hintn(1000) {
-        //     //no packet to be read
-        //     //#[cfg(feature = "rttdebug")]
-        //     println!("no packet to read?");
-        //     return Ok(0);
-        // }
-        // self.read_packet(recv_buf)
     }
 
     fn write_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError> {
-        // self.csn.set_low().map_err(Error::Pin)?;
         let rc = self.spi.write(&packet).map_err(Error::Comm);
-        // self.csn.set_high().map_err(Error::Pin)?;
         if rc.is_err() {
             return Err(rc.unwrap_err());
         }
@@ -232,7 +216,6 @@ where
                 &recv_buf[..PACKET_HEADER_LENGTH],
             );
         }
-        // println!("recv_buf: {:?}", &recv_buf[..read_packet_len]);
 
         if read_packet_len > 0 {
             self.received_packet_count += 1;
@@ -250,7 +233,7 @@ where
         if self.wait_for_sensor_awake(delay_source, max_ms) {
             return self.read_packet(recv_buf);
         }
-        // println!("Sensor did not wake for read");
+        // log!("Sensor did not wake for read");
         Ok(0)
     }
 }

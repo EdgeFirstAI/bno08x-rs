@@ -1,16 +1,13 @@
 // pub mod i2c;
 pub mod delay;
 pub mod gpio;
+pub mod log;
 pub mod spi;
 pub mod spidev;
 
 use crate::interface::delay::DelayMs;
 use core::ops::Shl;
 // use embedded_hal::blocking::delay::DelayMs;
-
-//#[cfg(feature = "rttdebug")]
-// use panic_rtt_core::println;
-use ::std::println;
 
 /// A method of communicating with the sensor
 pub trait SensorInterface {
@@ -78,23 +75,6 @@ impl SensorCommon {
             // we sometimes get garbage packets of [0xFF, 0xFF, 0xFF, 0xFF]
             packet_len = 0; //PACKET_HEADER_LENGTH;
         }
-
-        if 0 == packet_len && 0 != raw_pack_len {
-            //#[cfg(feature = "rttdebug")]
-            // println!(
-            //     "pph: {:?} {} -> {}",
-            //     &packet[..PACKET_HEADER_LENGTH],
-            //     raw_pack_len,
-            //     packet_len
-            // );
-        } else {
-            // println!(
-            //     "pph: {:?} {} ",
-            //     &packet[..PACKET_HEADER_LENGTH],
-            //     packet_len
-            // )
-        }
-
         packet_len
     }
 }
