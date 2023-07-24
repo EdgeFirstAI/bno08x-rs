@@ -7,12 +7,18 @@ LICENSE: BSD3 (see LICENSE file)
 Modified 2023 Au-Zone Technologies
 */
 
-use crate::interface::delay::DelayMs;
-use crate::interface::{SensorInterface, PACKET_HEADER_LENGTH};
+use crate::interface::delay::{DelayMs, TimerMs};
+use crate::interface::gpio::{GpiodIn, GpiodOut, InputPin, OutputPin};
+use crate::interface::spi::SpiControlLines;
+use crate::interface::spidev::{SpiDevice, Transfer, Write};
+use crate::interface::{
+    spi, SensorInterface, SpiInterface, PACKET_HEADER_LENGTH,
+};
 use crate::log;
 // use embedded_hal::blocking::delay::DelayMs;
 
 use core::ops::Shr;
+use std::io;
 
 const PACKET_SEND_BUF_LEN: usize = 256;
 const PACKET_RECV_BUF_LEN: usize = 1024;
@@ -98,6 +104,31 @@ impl<SI> BNO080<SI> {
     /// Returns previously consumed serial sensor instance.
     pub fn free(self) -> SI {
         self.sensor_interface
+    }
+}
+
+impl BNO080<SpiInterface<SpiDevice, GpiodIn, GpiodOut>> {
+    pub fn new_bno080(
+        spidevice: &str,
+        gpiochip: &str,
+        hintn_pin: u32,
+        reset_pin: u32,
+    ) -> io::Result<BNO080<SpiInterface<SpiDevice, GpiodIn, GpiodOut>>> {
+        let mut _chip = gpiod::Chip::new(gpiochip)?;
+        let mut _spidev = SpiDevice::new(spidevice)?;
+        let ctrl_lines: SpiControlLines<SpiDevice, GpiodIn, GpiodOut> =
+            SpiControlLines::<SpiDevice, GpiodIn, GpiodOut> {
+                spi: _spidev,
+                hintn: GpiodIn::new(&_chip, hintn_pin)?,
+                reset: GpiodOut::new(&_chip, reset_pin)?,
+            };
+
+        let spi_int: SpiInterface<SpiDevice, GpiodIn, GpiodOut> =
+            SpiInterface::new(ctrl_lines);
+        let imu_driver: BNO080<SpiInterface<SpiDevice, GpiodIn, GpiodOut>> =
+            BNO080::new_with_interface(spi_int);
+
+        Ok(imu_driver)
     }
 }
 

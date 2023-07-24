@@ -31,21 +31,9 @@ fn quaternion_to_euler(qr: f32, qi: f32, qj: f32, qk: f32) -> [f32; 3] {
 }
 
 fn main() -> io::Result<()> {
-    let mut chip = Chip::new("/dev/gpiochip5")?; // open chip
-    let mut spi = SpiDevice::new("/dev/spidev1.0")?;
-    let ctrl_lines: SpiControlLines<SpiDevice, GpiodIn, GpiodOut> =
-        SpiControlLines::<SpiDevice, GpiodIn, GpiodOut> {
-            spi: spi,
-            // csn: (),
-            hintn: GpiodIn::new(&chip, 2)?,
-            reset: GpiodOut::new(&chip, 0)?,
-        };
-
-    let spi_int = SpiInterface::new(ctrl_lines);
-
+    let mut imu_driver =
+        BNO080::new_bno080("/dev/spidev1.0", "/dev/gpiochip5", 2, 0)?;
     let mut delay_source = TimerMs {};
-
-    let mut imu_driver = BNO080::new_with_interface(spi_int);
     imu_driver.init(&mut delay_source).unwrap();
     imu_driver.enable_rotation_vector(50).unwrap();
 
