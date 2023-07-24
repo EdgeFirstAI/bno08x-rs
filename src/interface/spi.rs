@@ -1,7 +1,7 @@
 use super::SensorInterface;
 use crate::interface::delay::DelayMs;
 use crate::interface::gpio::{InputPin, OutputPin};
-use crate::interface::spidev::{SpiDevice, Transfer, Write};
+use crate::interface::spidev::{Transfer, Write};
 use crate::interface::{SensorCommon, PACKET_HEADER_LENGTH};
 use crate::Error;
 use crate::Error::SensorUnresponsive;
@@ -146,7 +146,7 @@ where
             *i = 0;
         }
 
-        let mut tmp = &mut [0u8; PACKET_HEADER_LENGTH];
+        let tmp = &mut [0u8; PACKET_HEADER_LENGTH];
         // check how long the message to read is
         let mut read_packet_len = 0;
         let rc = self.spi.transfer(&mut tmp[..]);
@@ -160,7 +160,7 @@ where
             recv_buf[i] = send_buf[i];
         }
         let total_packet_len = std::cmp::max(read_packet_len, send_buf.len());
-        if (total_packet_len > recv_buf.len()) {
+        if total_packet_len > recv_buf.len() {
             // TODO: throw Err()
             eprintln!("Total packet length greater than recv buffer size");
         }

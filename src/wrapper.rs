@@ -7,12 +7,12 @@ LICENSE: BSD3 (see LICENSE file)
 Modified 2023 Au-Zone Technologies
 */
 
-use crate::interface::delay::{DelayMs, TimerMs};
-use crate::interface::gpio::{GpiodIn, GpiodOut, InputPin, OutputPin};
+use crate::interface::delay::{DelayMs};
+use crate::interface::gpio::{GpiodIn, GpiodOut};
 use crate::interface::spi::SpiControlLines;
-use crate::interface::spidev::{SpiDevice, Transfer, Write};
+use crate::interface::spidev::{SpiDevice};
 use crate::interface::{
-    spi, SensorInterface, SpiInterface, PACKET_HEADER_LENGTH,
+    SensorInterface, SpiInterface, PACKET_HEADER_LENGTH,
 };
 use crate::log;
 // use embedded_hal::blocking::delay::DelayMs;
@@ -569,7 +569,7 @@ where
         ];
 
         //we simply blast out this configuration command and assume it'll succeed
-        let size = self.send_packet(CHANNEL_HUB_CONTROL, &cmd_body)?;
+        let _size = self.send_packet(CHANNEL_HUB_CONTROL, &cmd_body)?;
         // any error or success in configuration will arrive some time later
 
         Ok(())

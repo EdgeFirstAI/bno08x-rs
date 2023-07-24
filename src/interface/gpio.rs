@@ -1,7 +1,7 @@
 // extern crate gpiod;
 use ::std::ops::Not;
 use gpiod::{
-    AsValuesMut, Chip, Direction, EdgeDetect, Input, Lines, Masked, Options,
+    Chip, Input, Lines, Options,
     Output,
 };
 use std::io;

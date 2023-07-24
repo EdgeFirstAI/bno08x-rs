@@ -1,16 +1,12 @@
 use bno080::interface::{
     delay::{DelayMs, TimerMs},
-    gpio::{GpiodIn, GpiodOut},
-    spi::SpiControlLines,
-    spidev::{SpiDevice, Transfer, Write},
-    SpiInterface,
 };
 use bno080::wrapper::BNO080;
-use gpiod::{AsValuesMut, Chip, EdgeDetect, Masked, Options};
-use spidev::{SpiModeFlags, Spidev, SpidevOptions, SpidevTransfer};
+
+
 use std::{
     f32::consts::PI,
-    io::{self, prelude::*},
+    io::{self},
 };
 
 const RAD_TO_DEG: f32 = 180f32 / PI;
