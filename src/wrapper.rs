@@ -7,13 +7,11 @@ LICENSE: BSD3 (see LICENSE file)
 Modified 2023 Au-Zone Technologies
 */
 
-use crate::interface::delay::{DelayMs};
+use crate::interface::delay::DelayMs;
 use crate::interface::gpio::{GpiodIn, GpiodOut};
 use crate::interface::spi::SpiControlLines;
-use crate::interface::spidev::{SpiDevice};
-use crate::interface::{
-    SensorInterface, SpiInterface, PACKET_HEADER_LENGTH,
-};
+use crate::interface::spidev::SpiDevice;
+use crate::interface::{SensorInterface, SpiInterface, PACKET_HEADER_LENGTH};
 use crate::log;
 // use embedded_hal::blocking::delay::DelayMs;
 
@@ -37,7 +35,7 @@ pub enum WrapperError<E> {
     NoDataAvailable,
 }
 
-pub struct BNO080<SI> {
+pub struct BNO08x<SI> {
     pub(crate) sensor_interface: SI,
     /// each communication channel with the device has its own sequence number
     sequence_numbers: [u8; NUM_CHANNELS],
@@ -77,7 +75,7 @@ pub struct BNO080<SI> {
     gyro: [f32; 3],
 }
 
-impl<SI> BNO080<SI> {
+impl<SI> BNO08x<SI> {
     pub fn new_with_interface(sensor_interface: SI) -> Self {
         Self {
             sensor_interface,
@@ -107,13 +105,13 @@ impl<SI> BNO080<SI> {
     }
 }
 
-impl BNO080<SpiInterface<SpiDevice, GpiodIn, GpiodOut>> {
-    pub fn new_bno080(
+impl BNO08x<SpiInterface<SpiDevice, GpiodIn, GpiodOut>> {
+    pub fn new_bno08x(
         spidevice: &str,
         gpiochip: &str,
         hintn_pin: u32,
         reset_pin: u32,
-    ) -> io::Result<BNO080<SpiInterface<SpiDevice, GpiodIn, GpiodOut>>> {
+    ) -> io::Result<BNO08x<SpiInterface<SpiDevice, GpiodIn, GpiodOut>>> {
         let mut _chip = gpiod::Chip::new(gpiochip)?;
         let mut _spidev = SpiDevice::new(spidevice)?;
         let ctrl_lines: SpiControlLines<SpiDevice, GpiodIn, GpiodOut> =
@@ -125,14 +123,14 @@ impl BNO080<SpiInterface<SpiDevice, GpiodIn, GpiodOut>> {
 
         let spi_int: SpiInterface<SpiDevice, GpiodIn, GpiodOut> =
             SpiInterface::new(ctrl_lines);
-        let imu_driver: BNO080<SpiInterface<SpiDevice, GpiodIn, GpiodOut>> =
-            BNO080::new_with_interface(spi_int);
+        let imu_driver: BNO08x<SpiInterface<SpiDevice, GpiodIn, GpiodOut>> =
+            BNO08x::new_with_interface(spi_int);
 
         Ok(imu_driver)
     }
 }
 
-impl<SI, SE> BNO080<SI>
+impl<SI, SE> BNO08x<SI>
 where
     SI: SensorInterface<SensorError = SE>,
     SE: core::fmt::Debug,
@@ -831,7 +829,7 @@ mod tests {
     // use super::*;
     use crate::interface::i2c::DEFAULT_ADDRESS;
     use crate::interface::mock_i2c_port::FakeI2cPort;
-    use crate::wrapper::{q14_to_f32, BNO080, Q14_SCALE};
+    use crate::wrapper::{q14_to_f32, BNO08x, Q14_SCALE};
 
     use crate::interface::I2cInterface;
 
@@ -853,7 +851,7 @@ mod tests {
         let packet = ADVERTISING_PACKET_FULL;
         mock_i2c_port.add_available_packet(&packet);
 
-        let mut shub = BNO080::new_with_interface(I2cInterface::new(
+        let mut shub = BNO08x::new_with_interface(I2cInterface::new(
             mock_i2c_port,
             DEFAULT_ADDRESS,
         ));
@@ -872,7 +870,7 @@ mod tests {
         let raw_packet = ADVERTISING_PACKET_FULL;
         mock_i2c_port.add_available_packet(&raw_packet);
 
-        let mut shub = BNO080::new_with_interface(I2cInterface::new(
+        let mut shub = BNO08x::new_with_interface(I2cInterface::new(
             mock_i2c_port,
             DEFAULT_ADDRESS,
         ));

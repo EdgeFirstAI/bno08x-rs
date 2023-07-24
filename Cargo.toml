@@ -1,17 +1,17 @@
 [package]
-name = "bno080"
-description = "ADIS Logging Service"
-repository = "https://bitbucket.org/au-zone/adis-logger"
-version = "0.2.3"
+name = "bno08x"
+description = "BNO08x IMU Driver for ADIS"
+repository = "https://bitbucket.org/au-zone/bno08x-rs/src/master/"
+version = "0.0.1"
 edition = "2021"
 readme = "README.md"
 
 [[bin]]
-name = "bno080"
+name = "bno08x"
 path = "src/main.rs"
 
 [lib]
-name = "bno080"
+name = "bno08x"
 path = "src/lib.rs"
 
 [dependencies]

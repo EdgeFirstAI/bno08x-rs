@@ -1,8 +1,5 @@
-use bno080::interface::{
-    delay::{DelayMs, TimerMs},
-};
-use bno080::wrapper::BNO080;
-
+use bno08x::interface::delay::{DelayMs, TimerMs};
+use bno08x::wrapper::BNO08x;
 
 use std::{
     f32::consts::PI,
@@ -28,7 +25,7 @@ fn quaternion_to_euler(qr: f32, qi: f32, qj: f32, qk: f32) -> [f32; 3] {
 
 fn main() -> io::Result<()> {
     let mut imu_driver =
-        BNO080::new_bno080("/dev/spidev1.0", "/dev/gpiochip5", 2, 0)?;
+        BNO08x::new_bno08x("/dev/spidev1.0", "/dev/gpiochip5", 2, 0)?;
     let mut delay_source = TimerMs {};
     imu_driver.init(&mut delay_source).unwrap();
     imu_driver.enable_rotation_vector(50).unwrap();
