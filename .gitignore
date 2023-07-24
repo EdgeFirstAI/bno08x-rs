@@ -1,6 +1,8 @@
 .DS_Store
 /target
 **/*.rs.bk
-Cargo.lock
 .idea
+target*/
 .vscode/
+build*/
+*-rs/
