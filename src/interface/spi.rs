@@ -191,7 +191,10 @@ where
         &mut self,
         recv_buf: &mut [u8],
     ) -> Result<usize, Self::SensorError> {
-        // Note: HINTN cannot always be used to detect data ready.
+        if (!self.block_on_hintn(1000)) {
+            eprintln!("No message to read");
+            // return Err(SensorUnresponsive);
+        }
         // As soon as host selects CSN, HINTN resets
 
         // check how long the message to read is
