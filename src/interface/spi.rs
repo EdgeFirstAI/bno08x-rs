@@ -191,7 +191,7 @@ where
         &mut self,
         recv_buf: &mut [u8],
     ) -> Result<usize, Self::SensorError> {
-        if (!self.block_on_hintn(1000)) {
+        if !self.block_on_hintn(1000) {
             eprintln!("No message to read");
             // return Err(SensorUnresponsive);
         }
