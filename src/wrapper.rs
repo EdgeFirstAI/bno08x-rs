@@ -482,11 +482,11 @@ where
             self.handle_one_message(delay_source, 255u8);
             // eat the unsolicited initialization response
             println!("Eating initialization response");
+            // Further reads don't respond
             // delay_source.delay_ms(255u8);
             // self.handle_one_message(delay_source, 255u8);
         }
         // delay_source.delay_ms(255u8);
-        // self.eat_all_messages(delay_source);
         self.verify_product_id(delay_source)?;
         //self.eat_all_messages(delay_source);
 
@@ -554,8 +554,7 @@ where
         ];
 
         //we simply blast out this configuration command and assume it'll succeed
-        let size =
-            self.send_and_receive_packet(CHANNEL_HUB_CONTROL, &cmd_body)?;
+        let size = self.send_packet(CHANNEL_HUB_CONTROL, &cmd_body)?;
         // any error or success in configuration will arrive some time later
 
         Ok(())
@@ -589,7 +588,8 @@ where
         body_data: &[u8],
     ) -> Result<usize, WrapperError<SE>> {
         let packet_length = self.prep_send_packet(channel, body_data);
-        println!("Sending {:?}", &self.packet_send_buf[..packet_length]);
+        // println!("Sending {:?}", &self.packet_send_buf[..packet_length]);
+
         self.sensor_interface
             .write_packet(&self.packet_send_buf[..packet_length])
             .map_err(WrapperError::CommError)?;

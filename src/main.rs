@@ -85,10 +85,6 @@ fn quaternion_to_euler(qr: f32, qi: f32, qj: f32, qk: f32) -> [f32; 3] {
 fn main() -> io::Result<()> {
     let mut chip = Chip::new("/dev/gpiochip5")?; // open chip
     let mut spi = SpiDevice::new("/dev/spidev1.0")?;
-
-    // let mut buf_rx = [6, 0, 2, 0, 249, 0];
-    // println!("{:?}", spi.transfer(buf_rx.as_mut()));
-
     let ctrl_lines: SpiControlLines<SpiDevice, GpiodIn, GpiodOut> =
         SpiControlLines::<SpiDevice, GpiodIn, GpiodOut> {
             spi: spi,
