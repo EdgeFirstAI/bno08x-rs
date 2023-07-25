@@ -428,12 +428,12 @@ where
                     SHUB_PROD_ID_RESP => {
                         {
                             //let reset_cause = msg[4 + 1];
-                            let sw_vers_major = msg[4 + 2];
-                            let sw_vers_minor = msg[4 + 3];
+                            let _sw_vers_major = msg[4 + 2];
+                            let _sw_vers_minor = msg[4 + 3];
                             log!(
                                 "PID_RESP {}.{}",
-                                sw_vers_major,
-                                sw_vers_minor
+                                _sw_vers_major,
+                                _sw_vers_major
                             );
                         }
 
