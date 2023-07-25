@@ -9,7 +9,7 @@ macro_rules! log {
 }
 
 // Non-debug version
-
+#[macro_export]
 #[cfg(not(debug_assertions))]
 macro_rules! log {
     ($( $args:expr ),*) => {
