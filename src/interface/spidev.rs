@@ -2,8 +2,6 @@ extern crate spidev;
 
 use spidev::{SpiModeFlags, Spidev, SpidevOptions, SpidevTransfer};
 
-
-
 use std::path::Path;
 use std::{io, vec};
 /// Blocking transfer
@@ -35,7 +33,7 @@ impl SpiDevice {
         let mut spi = Spidev::open(path)?;
         let options = SpidevOptions::new()
             .bits_per_word(8)
-            .max_speed_hz(25_000)
+            .max_speed_hz(20_000)
             .mode(SpiModeFlags::SPI_MODE_3)
             .lsb_first(false)
             .build();
