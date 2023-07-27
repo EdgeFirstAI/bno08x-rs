@@ -41,7 +41,7 @@ fn main() -> io::Result<()> {
         // }
         delay_source.delay_ms(loop_interval);
         // println!("Current rotation: {:?}", imu_driver.rotation_quaternion());
-        let [qr, qi, qj, qk] = imu_driver.rotation_quaternion().unwrap();
+        let [qi, qj, qk, qr] = imu_driver.rotation_quaternion().unwrap();
         println!(
             "Current rotation: {:?}",
             quaternion_to_euler(qr, qi, qj, qk)
