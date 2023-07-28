@@ -14,14 +14,14 @@
 use std::{thread, time::Duration};
 pub trait DelayMs {
     /// Pauses execution for `ms` milliseconds
-    fn delay_ms(&mut self, ms: u8);
+    fn delay_ms(&mut self, ms: usize);
 }
 
 pub struct TimerMs {}
 
 impl DelayMs for TimerMs {
-    fn delay_ms(&mut self, ms: u8) {
-        let time = Duration::from_millis(ms.into());
+    fn delay_ms(&mut self, ms: usize) {
+        let time = Duration::from_millis(ms as u64);
         thread::sleep(time);
     }
 }

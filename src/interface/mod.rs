@@ -36,7 +36,7 @@ pub trait SensorInterface {
         &mut self,
         recv_buf: &mut [u8],
         delay_source: &mut impl DelayMs,
-        max_ms: u8,
+        max_ms: usize,
     ) -> Result<usize, Self::SensorError>;
 
     /// Send a packet and receive the response immediately

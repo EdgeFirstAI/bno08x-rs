@@ -66,7 +66,7 @@ where
     fn wait_for_sensor_awake(
         &mut self,
         delay_source: &mut impl DelayMs,
-        max_ms: u8,
+        max_ms: usize,
     ) -> bool {
         for _ in 0..max_ms {
             if self.hintn_signaled() {
@@ -127,7 +127,7 @@ where
         self.reset.set_high().map_err(Error::Pin)?;
 
         // wait for sensor to set hintn pin after reset
-        let ready = self.wait_for_sensor_awake(delay_source, 200u8);
+        let ready = self.wait_for_sensor_awake(delay_source, 200);
         if !ready {
             eprintln!("Setup: sensor not ready");
             return Err(SensorUnresponsive);
@@ -231,7 +231,7 @@ where
         &mut self,
         recv_buf: &mut [u8],
         delay_source: &mut impl DelayMs,
-        max_ms: u8,
+        max_ms: usize,
     ) -> Result<usize, Self::SensorError> {
         if self.wait_for_sensor_awake(delay_source, max_ms) {
             return self.read_packet(recv_buf);

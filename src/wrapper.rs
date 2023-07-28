@@ -71,8 +71,13 @@ pub struct BNO08x<SI> {
     /// Linear acceleration vector
     linear_accel: [f32; 3],
 
+    /// Gravity vector
+    gravity: [f32; 3],
+
     /// Gyroscope calibrated data
     gyro: [f32; 3],
+
+    report_enabled: [bool; 256],
 }
 
 impl<SI> BNO08x<SI> {
@@ -96,6 +101,8 @@ impl<SI> BNO08x<SI> {
             rot_quaternion_acc: 0.0,
             linear_accel: [0.0; 3],
             gyro: [0.0; 3],
+            gravity: [0.0; 3],
+            report_enabled: [false; 256],
         }
     }
 
@@ -151,7 +158,7 @@ where
     pub fn handle_all_messages(
         &mut self,
         delay: &mut impl DelayMs,
-        timeout_ms: u8,
+        timeout_ms: usize,
     ) -> u32 {
         let mut total_handled: u32 = 0;
         loop {
@@ -171,7 +178,7 @@ where
     pub fn handle_one_message(
         &mut self,
         delay: &mut impl DelayMs,
-        max_ms: u8,
+        max_ms: usize,
     ) -> u32 {
         let mut msg_count = 0;
 
@@ -282,7 +289,7 @@ where
         }
 
         let payload_len = received_len - outer_cursor;
-        if payload_len < 14 {
+        if payload_len < 10 {
             log!(
                 "bad report: {:?}",
                 &self.packet_recv_buf[..PACKET_HEADER_LENGTH]
@@ -312,6 +319,9 @@ where
                 }
                 SENSOR_REPORTID_GYRO => {
                     self.update_gyro_cal(data1, data2, data3);
+                }
+                SENSOR_REPORTID_GRAVITY => {
+                    self.update_gravity(data1, data2, data3);
                 }
                 _ => {
                     // debug_log!("uhr: {:X}", report_id);
@@ -361,6 +371,16 @@ where
         self.gyro = [x, y, z];
     }
 
+    /// Given a set of gravity values in the Q-fixed-point format,
+    /// calculate and update the corresponding float values
+    fn update_gravity(&mut self, x: i16, y: i16, z: i16) {
+        let x = q8_to_f32(x);
+        let y = q8_to_f32(y);
+        let z = q8_to_f32(z);
+
+        self.gravity = [x, y, z];
+    }
+
     /// Handle one or more errors sent in response to a command
     fn handle_cmd_resp_error_list(&mut self, received_len: usize) {
         let payload_len = received_len - PACKET_HEADER_LENGTH;
@@ -376,10 +396,18 @@ where
     }
 
     pub fn handle_received_packet(&mut self, received_len: usize) {
-        let msg = &self.packet_recv_buf[..received_len];
+        let mut _rec_len = received_len;
+        if _rec_len > PACKET_RECV_BUF_LEN {
+            eprintln!(
+                "Packet length of {} exceeded the buffer length of {}",
+                received_len, PACKET_RECV_BUF_LEN
+            );
+            _rec_len = PACKET_RECV_BUF_LEN;
+        }
+        let msg = &self.packet_recv_buf[.._rec_len];
         let chan_num = msg[2];
         //let _seq_num =  msg[3];
-        let report_id: u8 = if received_len > PACKET_HEADER_LENGTH {
+        let report_id: u8 = if _rec_len > PACKET_HEADER_LENGTH {
             msg[4]
         } else {
             0
@@ -389,10 +417,10 @@ where
         match chan_num {
             CHANNEL_COMMAND => match report_id {
                 CMD_RESP_ADVERTISEMENT => {
-                    self.handle_advertise_response(received_len);
+                    self.handle_advertise_response(_rec_len);
                 }
                 CMD_RESP_ERROR_LIST => {
-                    self.handle_cmd_resp_error_list(received_len);
+                    self.handle_cmd_resp_error_list(_rec_len);
                 }
                 _ => {
                     self.last_command_chan_rid = report_id;
@@ -441,8 +469,8 @@ where
                     }
                     SHUB_GET_FEATURE_RESP => {
                         // 0xFC
-
                         log!("feat resp: {}", msg[5]);
+                        self.report_enabled[msg[5] as usize] = true;
                     }
                     _ => {
                         log!(
@@ -454,7 +482,7 @@ where
                 }
             }
             CHANNEL_SENSOR_REPORTS => {
-                self.handle_sensor_reports(received_len);
+                self.handle_sensor_reports(_rec_len);
             }
             _ => {
                 self.last_chan_received = chan_num;
@@ -474,36 +502,35 @@ where
 
         //Section 5.1.1.1 : On system startup, the SHTP control application will send
         // its full advertisement response, unsolicited, to the host.
-        delay_source.delay_ms(1u8);
+        delay_source.delay_ms(1);
         self.sensor_interface
             .setup(delay_source)
             .map_err(WrapperError::CommError)?;
 
         if self.sensor_interface.requires_soft_reset() {
-            delay_source.delay_ms(1u8);
+            delay_source.delay_ms(1);
             self.soft_reset()?;
-            delay_source.delay_ms(255u8);
+            delay_source.delay_ms(250);
             self.eat_all_messages(delay_source);
-            delay_source.delay_ms(255u8);
+            delay_source.delay_ms(250);
             self.eat_all_messages(delay_source);
         } else {
             // we only expect two messages after reset:
             // eat the advertisement response
-            delay_source.delay_ms(255u8);
+            delay_source.delay_ms(250);
             log!("Eating advertisement response");
-            self.handle_one_message(delay_source, 20u8);
+            self.handle_one_message(delay_source, 20);
             log!("Eating reset response");
-            delay_source.delay_ms(255u8);
-            self.handle_one_message(delay_source, 20u8);
+            delay_source.delay_ms(250);
+            self.handle_one_message(delay_source, 20);
             // eat the unsolicited initialization response
             // log!("Eating initialization response");
-            // Further reads don't respond
-            // delay_source.delay_ms(255u8);
-            // self.handle_one_message(delay_source, 255u8);
+            // Further reads don't respond if we uncomment this
+            // delay_source.delay_ms(255);
+            // self.handle_one_message(delay_source, 255);
         }
         self.verify_product_id(delay_source)?;
-        //self.eat_all_messages(delay_source);
-
+        delay_source.delay_ms(100);
         Ok(())
     }
 
@@ -512,9 +539,11 @@ where
     /// is 1 kHz, based on the max update rate of the sensor's gyros.
     pub fn enable_rotation_vector(
         &mut self,
+        delay: &mut impl DelayMs,
         millis_between_reports: u16,
     ) -> Result<(), WrapperError<SE>> {
         self.enable_report(
+            delay,
             SENSOR_REPORTID_ROTATION_VECTOR,
             millis_between_reports,
         )
@@ -523,22 +552,42 @@ where
     /// Enables reporting of linear acceleration vector.
     pub fn enable_linear_accel(
         &mut self,
+        delay: &mut impl DelayMs,
         millis_between_reports: u16,
     ) -> Result<(), WrapperError<SE>> {
-        self.enable_report(SENSOR_REPORTID_LINEAR_ACCEL, millis_between_reports)
+        self.enable_report(
+            delay,
+            SENSOR_REPORTID_LINEAR_ACCEL,
+            millis_between_reports,
+        )
     }
 
     /// Enables reporting of gyroscope data.
     pub fn enable_gyro(
         &mut self,
+        delay: &mut impl DelayMs,
         millis_between_reports: u16,
     ) -> Result<(), WrapperError<SE>> {
-        self.enable_report(SENSOR_REPORTID_GYRO, millis_between_reports)
+        self.enable_report(delay, SENSOR_REPORTID_GYRO, millis_between_reports)
+    }
+
+    /// Enables reporting of linear acceleration vector.
+    pub fn enable_gravity(
+        &mut self,
+        delay: &mut impl DelayMs,
+        millis_between_reports: u16,
+    ) -> Result<(), WrapperError<SE>> {
+        self.enable_report(
+            delay,
+            SENSOR_REPORTID_GRAVITY,
+            millis_between_reports,
+        )
     }
 
     /// Enable a particular report
     fn enable_report(
         &mut self,
+        delay: &mut impl DelayMs,
         report_id: u8,
         millis_between_reports: u16,
     ) -> Result<(), WrapperError<SE>> {
@@ -567,9 +616,29 @@ where
         ];
 
         //we simply blast out this configuration command and assume it'll succeed
-        let _size = self.send_packet(CHANNEL_HUB_CONTROL, &cmd_body)?;
+        // let _size = self.send_packet(CHANNEL_HUB_CONTROL, &cmd_body)?;
+        self.send_packet(CHANNEL_HUB_CONTROL, &cmd_body)?;
         // any error or success in configuration will arrive some time later
-
+        let mut msgs = 0;
+        while !self.report_enabled[report_id as usize] && msgs < 5 {
+            let rc = self.receive_packet_with_timeout(delay, 250);
+            if rc.is_ok() {
+                let received_len = rc.unwrap();
+                if received_len > 0 {
+                    self.handle_received_packet(received_len);
+                }
+                msgs += 1;
+            }
+        }
+        delay.delay_ms(500);
+        log!(
+            "Report {:x} is enabled: {}",
+            report_id,
+            self.report_enabled[report_id as usize]
+        );
+        if !self.report_enabled[report_id as usize] {
+            eprintln!("Could not enable report id: {}", report_id);
+        }
         Ok(())
     }
 
@@ -613,7 +682,7 @@ where
     pub(crate) fn receive_packet_with_timeout(
         &mut self,
         delay: &mut impl DelayMs,
-        max_ms: u8,
+        max_ms: usize,
     ) -> Result<usize, WrapperError<SE>> {
         self.packet_recv_buf[0] = 0;
         self.packet_recv_buf[1] = 0;
@@ -654,7 +723,7 @@ where
         // process all incoming messages until we get a product id (or no more data)
         while !self.prod_id_verified {
             log!("read PID");
-            let msg_count = self.handle_one_message(delay, 150u8);
+            let msg_count = self.handle_one_message(delay, 150);
             if msg_count < 1 {
                 break;
             }
@@ -687,6 +756,11 @@ where
     /// Read gyroscope data (rad/s)
     pub fn gyro(&self) -> Result<[f32; 3], WrapperError<SE>> {
         Ok(self.gyro)
+    }
+
+    /// Read gravity (m/s^2)
+    pub fn gravity(&self) -> Result<[f32; 3], WrapperError<SE>> {
+        Ok(self.gravity)
     }
 
     /// Tell the sensor to reset.
@@ -796,7 +870,7 @@ const SENSOR_REPORTID_LINEAR_ACCEL: u8 = 0x04;
 
 /// Unit quaternion rotation vector, Q point 12, with heading accuracy estimate (radians)
 const SENSOR_REPORTID_ROTATION_VECTOR: u8 = 0x05;
-// const SENSOR_REPORTID_GRAVITY: u8 = 0x06; // Q point 8
+const SENSOR_REPORTID_GRAVITY: u8 = 0x06; // Q point 8
 /// Gyroscope uncalibrated (rad/s): Q point 9
 const SENSOR_REPORTID_GYRO: u8 = 0x07;
 // 0x08 game rotation vector : Q point 14

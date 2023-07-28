@@ -2,6 +2,7 @@ extern crate spidev;
 
 use spidev::{SpiModeFlags, Spidev, SpidevOptions, SpidevTransfer};
 
+use crate::log;
 use std::path::Path;
 use std::{io, vec};
 /// Blocking transfer
@@ -54,7 +55,7 @@ impl Transfer for SpiDevice {
         let mut transfer = SpidevTransfer::read_write(words, buf);
         self.spi.transfer(&mut transfer)?;
         words.clone_from_slice(buf);
-        // log!("Transfer read: {:?}", words);
+        log!("Transfer read: {:?}", words);
         Ok(words)
     }
 }
@@ -66,7 +67,7 @@ impl Write for SpiDevice {
         let buf = rx_buf.as_mut();
         let mut transfer = SpidevTransfer::read_write(words, buf);
         self.spi.transfer(&mut transfer)?;
-        // log!("Write read: {:?}", buf);
+        log!("Write read: {:?}", buf);
         Ok(())
     }
 }

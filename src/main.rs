@@ -28,23 +28,24 @@ fn main() -> io::Result<()> {
         BNO08x::new_bno08x("/dev/spidev1.0", "/dev/gpiochip5", 2, 0)?;
     let mut delay_source = TimerMs {};
     imu_driver.init(&mut delay_source).unwrap();
-    imu_driver.enable_rotation_vector(50).unwrap();
-
-    let loop_interval = 50 as u8;
-    println!("loop_interval: {}", loop_interval);
-
+    imu_driver
+        .enable_rotation_vector(&mut delay_source, 50)
+        .unwrap();
+    imu_driver.enable_gravity(&mut delay_source, 50).unwrap();
+    let loop_interval = 50;
+    // println!("loop_interval: {}", loop_interval);
     loop {
-        let _msg_count =
-            imu_driver.handle_all_messages(&mut delay_source, 10u8);
+        let _msg_count = imu_driver.handle_all_messages(&mut delay_source, 10);
         // if _msg_count > 0 {
         //     println!("> {}", _msg_count);
         // }
         delay_source.delay_ms(loop_interval);
-        // println!("Current rotation: {:?}", imu_driver.rotation_quaternion());
         let [qi, qj, qk, qr] = imu_driver.rotation_quaternion().unwrap();
         println!(
             "Current rotation: {:?}",
             quaternion_to_euler(qr, qi, qj, qk)
         );
+        let [ax, ay, az] = imu_driver.gravity().unwrap();
+        println!("Gravity: {} {} {}", ax, ay, az);
     }
 }
