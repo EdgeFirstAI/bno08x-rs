@@ -63,10 +63,19 @@ pub struct BNO08x<SI> {
     last_exec_chan_rid: u8,
     last_command_chan_rid: u8,
 
+    /// Accelerometer
+    accelerometer: [f32; 3],
+
     /// Rotation vector as unit quaternion
     rotation_quaternion: [f32; 4],
-    /// Heading accuracy of rotation vector (radians)
-    rot_quaternion_acc: f32,
+    rotation_acc: f32,
+
+    /// Geomagnetic rotation vector
+    geomag_rotation_quaternion: [f32; 4],
+    geomag_rotation_acc: f32,
+
+    /// Game rotation vector
+    game_rotation_quaternion: [f32; 4],
 
     /// Linear acceleration vector
     linear_accel: [f32; 3],
@@ -77,7 +86,12 @@ pub struct BNO08x<SI> {
     /// Gyroscope calibrated data
     gyro: [f32; 3],
 
-    report_enabled: [bool; 256],
+    uncalib_gryo: [f32; 3],
+
+    /// Magnetic field calibrated data
+    mag_field: [f32; 3],
+
+    report_enabled: [bool; 16],
 }
 
 impl<SI> BNO08x<SI> {
@@ -97,12 +111,18 @@ impl<SI> BNO08x<SI> {
             last_chan_received: 0,
             last_exec_chan_rid: 0,
             last_command_chan_rid: 0,
+            accelerometer: [0.0; 3],
             rotation_quaternion: [0.0; 4],
-            rot_quaternion_acc: 0.0,
+            rotation_acc: 0.0,
+            game_rotation_quaternion: [0.0; 4],
+            geomag_rotation_quaternion: [0.0; 4],
+            geomag_rotation_acc: 0.0,
             linear_accel: [0.0; 3],
-            gyro: [0.0; 3],
             gravity: [0.0; 3],
-            report_enabled: [false; 256],
+            gyro: [0.0; 3],
+            uncalib_gryo: [0.0; 3],
+            mag_field: [0.0; 3],
+            report_enabled: [false; 16],
         }
     }
 
@@ -309,26 +329,54 @@ where
             outer_cursor = inner_cursor;
             // report_count += 1;
             match report_id {
+                SENSOR_REPORTID_ACCELEROMETER => {
+                    self.update_accelerometer(data1, data2, data3);
+                }
                 SENSOR_REPORTID_ROTATION_VECTOR => {
                     self.update_rotation_quaternion(
+                        data1, data2, data3, data4, data5,
+                    );
+                }
+                SENSOR_REPORTID_ROTATION_VECTOR_GAME => {
+                    self.update_rotation_quaternion_game(
+                        data1, data2, data3, data4,
+                    );
+                }
+                SENSOR_REPORTID_ROTATION_VECTOR_GEOMAGNETIC => {
+                    self.update_rotation_quaternion_geomag(
                         data1, data2, data3, data4, data5,
                     );
                 }
                 SENSOR_REPORTID_LINEAR_ACCEL => {
                     self.update_linear_accel(data1, data2, data3);
                 }
-                SENSOR_REPORTID_GYRO => {
-                    self.update_gyro_cal(data1, data2, data3);
-                }
                 SENSOR_REPORTID_GRAVITY => {
                     self.update_gravity(data1, data2, data3);
                 }
+                SENSOR_REPORTID_GYROSCOPE => {
+                    self.update_gyro_calib(data1, data2, data3);
+                }
+                SENSOR_REPORTID_GYROSCOPE_UNCALIB => {
+                    self.update_gyro_uncalib(data1, data2, data3);
+                }
+                SENSOR_REPORTID_MAGNETIC_FIELD => {
+                    self.update_magnetic_field_calib(data1, data2, data3);
+                }
+
                 _ => {
                     // debug_log!("uhr: {:X}", report_id);
                     // debug_log!("uhr: 0x{:X} {:?}  ", report_id, &self.packet_recv_buf[start_cursor..start_cursor+5]);
                 }
             }
         }
+    }
+
+    fn update_accelerometer(&mut self, x: i16, y: i16, z: i16) {
+        let x = q_to_f32(x, Q_POINTS[SENSOR_REPORTID_ACCELEROMETER as usize]);
+        let y = q_to_f32(y, Q_POINTS[SENSOR_REPORTID_ACCELEROMETER as usize]);
+        let z = q_to_f32(z, Q_POINTS[SENSOR_REPORTID_ACCELEROMETER as usize]);
+
+        self.accelerometer = [x, y, z];
     }
 
     /// Given a set of quaternion values in the Q-fixed-point format,
@@ -343,40 +391,129 @@ where
     ) {
         //debug_log!("rquat {} {} {} {} {}", q_i, q_j, q_k, q_r, q_a);
         self.rotation_quaternion = [
-            q14_to_f32(q_i),
-            q14_to_f32(q_j),
-            q14_to_f32(q_k),
-            q14_to_f32(q_r),
+            q_to_f32(q_i, Q_POINTS[SENSOR_REPORTID_ROTATION_VECTOR as usize]),
+            q_to_f32(q_j, Q_POINTS[SENSOR_REPORTID_ROTATION_VECTOR as usize]),
+            q_to_f32(q_k, Q_POINTS[SENSOR_REPORTID_ROTATION_VECTOR as usize]),
+            q_to_f32(q_r, Q_POINTS[SENSOR_REPORTID_ROTATION_VECTOR as usize]),
         ];
-        self.rot_quaternion_acc = q12_to_f32(q_a);
+        self.rotation_acc =
+            q_to_f32(q_a, Q_POINTS2[SENSOR_REPORTID_ROTATION_VECTOR as usize]);
+    }
+
+    /// Given a set of quaternion values in the Q-fixed-point format,
+    /// calculate and update the corresponding float values
+    fn update_rotation_quaternion_geomag(
+        &mut self,
+        q_i: i16,
+        q_j: i16,
+        q_k: i16,
+        q_r: i16,
+        q_a: i16,
+    ) {
+        //debug_log!("rquat {} {} {} {} {}", q_i, q_j, q_k, q_r, q_a);
+        self.geomag_rotation_quaternion = [
+            q_to_f32(
+                q_i,
+                Q_POINTS[SENSOR_REPORTID_ROTATION_VECTOR_GEOMAGNETIC as usize],
+            ),
+            q_to_f32(
+                q_j,
+                Q_POINTS[SENSOR_REPORTID_ROTATION_VECTOR_GEOMAGNETIC as usize],
+            ),
+            q_to_f32(
+                q_k,
+                Q_POINTS[SENSOR_REPORTID_ROTATION_VECTOR_GEOMAGNETIC as usize],
+            ),
+            q_to_f32(
+                q_r,
+                Q_POINTS[SENSOR_REPORTID_ROTATION_VECTOR_GEOMAGNETIC as usize],
+            ),
+        ];
+        self.geomag_rotation_acc = q_to_f32(
+            q_a,
+            Q_POINTS2[SENSOR_REPORTID_ROTATION_VECTOR_GEOMAGNETIC as usize],
+        );
+    }
+
+    /// Given a set of quaternion values in the Q-fixed-point format,
+    /// calculate and update the corresponding float values
+    fn update_rotation_quaternion_game(
+        &mut self,
+        q_i: i16,
+        q_j: i16,
+        q_k: i16,
+        q_r: i16,
+    ) {
+        //debug_log!("rquat {} {} {} {} {}", q_i, q_j, q_k, q_r, q_a);
+        self.game_rotation_quaternion = [
+            q_to_f32(
+                q_i,
+                Q_POINTS[SENSOR_REPORTID_ROTATION_VECTOR_GAME as usize],
+            ),
+            q_to_f32(
+                q_j,
+                Q_POINTS[SENSOR_REPORTID_ROTATION_VECTOR_GAME as usize],
+            ),
+            q_to_f32(
+                q_k,
+                Q_POINTS[SENSOR_REPORTID_ROTATION_VECTOR_GAME as usize],
+            ),
+            q_to_f32(
+                q_r,
+                Q_POINTS[SENSOR_REPORTID_ROTATION_VECTOR_GAME as usize],
+            ),
+        ];
     }
 
     /// Given a set of linear acceleration values in the Q-fixed-point format,
     /// calculate and update the corresponding float values
     fn update_linear_accel(&mut self, x: i16, y: i16, z: i16) {
-        let x = q8_to_f32(x);
-        let y = q8_to_f32(y);
-        let z = q8_to_f32(z);
+        let x = q_to_f32(x, Q_POINTS[SENSOR_REPORTID_LINEAR_ACCEL as usize]);
+        let y = q_to_f32(y, Q_POINTS[SENSOR_REPORTID_LINEAR_ACCEL as usize]);
+        let z = q_to_f32(z, Q_POINTS[SENSOR_REPORTID_LINEAR_ACCEL as usize]);
 
         self.linear_accel = [x, y, z];
-    }
-
-    /// Given a set of linear acceleration values in the Q-fixed-point format,
-    /// calculate and update the corresponding float values
-    fn update_gyro_cal(&mut self, x: i16, y: i16, z: i16) {
-        let x = q9_to_f32(x);
-        let y = q9_to_f32(y);
-        let z = q9_to_f32(z);
-
-        self.gyro = [x, y, z];
     }
 
     /// Given a set of gravity values in the Q-fixed-point format,
     /// calculate and update the corresponding float values
     fn update_gravity(&mut self, x: i16, y: i16, z: i16) {
-        let x = q8_to_f32(x);
-        let y = q8_to_f32(y);
-        let z = q8_to_f32(z);
+        let x = q_to_f32(x, Q_POINTS[SENSOR_REPORTID_GRAVITY as usize]);
+        let y = q_to_f32(y, Q_POINTS[SENSOR_REPORTID_GRAVITY as usize]);
+        let z = q_to_f32(z, Q_POINTS[SENSOR_REPORTID_GRAVITY as usize]);
+
+        self.gravity = [x, y, z];
+    }
+
+    /// Given a set of linear acceleration values in the Q-fixed-point format,
+    /// calculate and update the corresponding float values
+    fn update_gyro_calib(&mut self, x: i16, y: i16, z: i16) {
+        let x = q_to_f32(x, Q_POINTS[SENSOR_REPORTID_GYROSCOPE as usize]);
+        let y = q_to_f32(y, Q_POINTS[SENSOR_REPORTID_GYROSCOPE as usize]);
+        let z = q_to_f32(z, Q_POINTS[SENSOR_REPORTID_GYROSCOPE as usize]);
+
+        self.gyro = [x, y, z];
+    }
+
+    /// Given a set of linear acceleration values in the Q-fixed-point format,
+    /// calculate and update the corresponding float values
+    fn update_gyro_uncalib(&mut self, x: i16, y: i16, z: i16) {
+        let x =
+            q_to_f32(x, Q_POINTS[SENSOR_REPORTID_GYROSCOPE_UNCALIB as usize]);
+        let y =
+            q_to_f32(y, Q_POINTS[SENSOR_REPORTID_GYROSCOPE_UNCALIB as usize]);
+        let z =
+            q_to_f32(z, Q_POINTS[SENSOR_REPORTID_GYROSCOPE_UNCALIB as usize]);
+
+        self.uncalib_gryo = [x, y, z];
+    }
+
+    /// Given a set of magnetic field values in the Q-fixed-point format,
+    /// calculate and update the corresponding float values
+    fn update_magnetic_field_calib(&mut self, x: i16, y: i16, z: i16) {
+        let x = q_to_f32(x, Q_POINTS[SENSOR_REPORTID_MAGNETIC_FIELD as usize]);
+        let y = q_to_f32(y, Q_POINTS[SENSOR_REPORTID_MAGNETIC_FIELD as usize]);
+        let z = q_to_f32(z, Q_POINTS[SENSOR_REPORTID_MAGNETIC_FIELD as usize]);
 
         self.gravity = [x, y, z];
     }
@@ -537,11 +674,12 @@ where
     /// Tell the sensor to start reporting the fused rotation vector
     /// on a regular cadence. Note that the maximum valid update rate
     /// is 1 kHz, based on the max update rate of the sensor's gyros.
+    /// Returns True if the report was successfully enabled. Otherwise returns False.
     pub fn enable_rotation_vector(
         &mut self,
         delay: &mut impl DelayMs,
         millis_between_reports: u16,
-    ) -> Result<(), WrapperError<SE>> {
+    ) -> Result<bool, WrapperError<SE>> {
         self.enable_report(
             delay,
             SENSOR_REPORTID_ROTATION_VECTOR,
@@ -549,12 +687,12 @@ where
         )
     }
 
-    /// Enables reporting of linear acceleration vector.
+    /// Enables reporting of linear acceleration vector. Returns True if the report was successfully enabled. Otherwise returns False.
     pub fn enable_linear_accel(
         &mut self,
         delay: &mut impl DelayMs,
         millis_between_reports: u16,
-    ) -> Result<(), WrapperError<SE>> {
+    ) -> Result<bool, WrapperError<SE>> {
         self.enable_report(
             delay,
             SENSOR_REPORTID_LINEAR_ACCEL,
@@ -562,21 +700,25 @@ where
         )
     }
 
-    /// Enables reporting of gyroscope data.
+    /// Enables reporting of gyroscope data. Returns True if the report was successfully enabled. Otherwise returns False.
     pub fn enable_gyro(
         &mut self,
         delay: &mut impl DelayMs,
         millis_between_reports: u16,
-    ) -> Result<(), WrapperError<SE>> {
-        self.enable_report(delay, SENSOR_REPORTID_GYRO, millis_between_reports)
+    ) -> Result<bool, WrapperError<SE>> {
+        self.enable_report(
+            delay,
+            SENSOR_REPORTID_GYROSCOPE,
+            millis_between_reports,
+        )
     }
 
-    /// Enables reporting of linear acceleration vector.
+    /// Enables reporting of linear acceleration vector. Returns True if the report was successfully enabled. Otherwise returns False.
     pub fn enable_gravity(
         &mut self,
         delay: &mut impl DelayMs,
         millis_between_reports: u16,
-    ) -> Result<(), WrapperError<SE>> {
+    ) -> Result<bool, WrapperError<SE>> {
         self.enable_report(
             delay,
             SENSOR_REPORTID_GRAVITY,
@@ -584,13 +726,13 @@ where
         )
     }
 
-    /// Enable a particular report
-    fn enable_report(
+    /// Enable a particular report. Returns True if the report was successfully enabled. Otherwise returns False.
+    pub fn enable_report(
         &mut self,
         delay: &mut impl DelayMs,
         report_id: u8,
         millis_between_reports: u16,
-    ) -> Result<(), WrapperError<SE>> {
+    ) -> Result<bool, WrapperError<SE>> {
         log!("enable_report 0x{:X}", report_id);
 
         let micros_between_reports: u32 =
@@ -638,8 +780,9 @@ where
         );
         if !self.report_enabled[report_id as usize] {
             eprintln!("Could not enable report id: {}", report_id);
+            return Ok(false);
         }
-        Ok(())
+        Ok(true)
     }
 
     /// Prepare a packet for sending, in our send buffer
@@ -735,32 +878,71 @@ where
         Ok(())
     }
 
+    pub fn accelerometer(&self) -> Result<[f32; 3], WrapperError<SE>> {
+        Ok(self.accelerometer)
+    }
+
     /// Read normalized quaternion:
-    /// QX normalized quaternion – X, or Heading | range: 0.0 – 1.0 ( ±π )
-    /// QY normalized quaternion – Y, or Pitch   | range: 0.0 – 1.0 ( ±π/2 )
-    /// QZ normalized quaternion – Z, or Roll    | range: 0.0 – 1.0 ( ±π )
-    /// QW normalized quaternion – W, or 0.0     | range: 0.0 – 1.0
+    /// QX normalized quaternion – X | range: 0.0 – 1.0 ( ±π )
+    /// QY normalized quaternion – Y | range: 0.0 – 1.0 ( ±π/2 )
+    /// QZ normalized quaternion – Z | range: 0.0 – 1.0 ( ±π )
+    /// QW normalized quaternion – W | range: 0.0 – 1.0
     pub fn rotation_quaternion(&self) -> Result<[f32; 4], WrapperError<SE>> {
         Ok(self.rotation_quaternion)
     }
 
-    pub fn heading_accuracy(&self) -> f32 {
-        self.rot_quaternion_acc
+    pub fn rotation_acc(&self) -> f32 {
+        self.rotation_acc
     }
 
+    /// Read normalized quaternion:
+    /// QX normalized quaternion – X | range: 0.0 – 1.0 ( ±π )
+    /// QY normalized quaternion – Y | range: 0.0 – 1.0 ( ±π/2 )
+    /// QZ normalized quaternion – Z | range: 0.0 – 1.0 ( ±π )
+    /// QW normalized quaternion – W | range: 0.0 – 1.0
+    pub fn game_rotation_quaternion(
+        &self,
+    ) -> Result<[f32; 4], WrapperError<SE>> {
+        Ok(self.game_rotation_quaternion)
+    }
+
+    /// Read normalized quaternion:
+    /// QX normalized quaternion – X | range: 0.0 – 1.0 ( ±π )
+    /// QY normalized quaternion – Y | range: 0.0 – 1.0 ( ±π/2 )
+    /// QZ normalized quaternion – Z | range: 0.0 – 1.0 ( ±π )
+    /// QW normalized quaternion – W | range: 0.0 – 1.0
+    pub fn geomag_rotation_quaternion(
+        &self,
+    ) -> Result<[f32; 4], WrapperError<SE>> {
+        Ok(self.rotation_quaternion)
+    }
+
+    pub fn geomag_rotation_acc(&self) -> f32 {
+        self.geomag_rotation_acc
+    }
     /// Read linear acceleration (m/s^2)
     pub fn linear_accel(&self) -> Result<[f32; 3], WrapperError<SE>> {
         Ok(self.linear_accel)
     }
 
-    /// Read gyroscope data (rad/s)
+    /// Read gravity (m/s^2)
+    pub fn gravity(&self) -> Result<[f32; 3], WrapperError<SE>> {
+        Ok(self.gravity)
+    }
+
+    /// Read calibrated gyroscope data (rad/s)
     pub fn gyro(&self) -> Result<[f32; 3], WrapperError<SE>> {
         Ok(self.gyro)
     }
 
-    /// Read gravity (m/s^2)
-    pub fn gravity(&self) -> Result<[f32; 3], WrapperError<SE>> {
-        Ok(self.gravity)
+    /// Read uncalibrated gyroscope data (rad/s)
+    pub fn gyro_uncalib(&self) -> Result<[f32; 3], WrapperError<SE>> {
+        Ok(self.uncalib_gryo)
+    }
+
+    /// Read magnetic field data (uT)
+    pub fn mag_field(&self) -> Result<[f32; 3], WrapperError<SE>> {
+        Ok(self.mag_field)
     }
 
     /// Tell the sensor to reset.
@@ -800,27 +982,8 @@ where
     }
 }
 
-const Q8_SCALE: f32 = 1.0 / ((1 << 8) as f32);
-const Q9_SCALE: f32 = 1.0 / ((1 << 9) as f32);
-const Q12_SCALE: f32 = 1.0 / ((1 << 12) as f32);
-const Q14_SCALE: f32 = 1.0 / ((1 << 14) as f32);
-
-fn q14_to_f32(q_val: i16) -> f32 {
-    // let qq_val =  fpa::I2F14(q_val).unwrap();
-    // return f32(qq_val)
-    (q_val as f32) * Q14_SCALE
-}
-
-fn q12_to_f32(q_val: i16) -> f32 {
-    (q_val as f32) * Q12_SCALE
-}
-
-fn q8_to_f32(q_val: i16) -> f32 {
-    (q_val as f32) * Q8_SCALE
-}
-
-fn q9_to_f32(q_val: i16) -> f32 {
-    (q_val as f32) * Q9_SCALE
+fn q_to_f32(q_val: i16, q_point: usize) -> f32 {
+    (q_val as f32) / ((1 << q_point) as f32)
 }
 
 // The BNO080 supports six communication channels:
@@ -863,23 +1026,34 @@ const SHUB_COMMAND_RESP: u8 = 0xF1;
 
 /// Report IDs from SH2 Reference Manual:
 // 0x01 accelerometer (m/s^2 including gravity): Q point 8
+pub const SENSOR_REPORTID_ACCELEROMETER: u8 = 0x01;
 // 0x02 gyroscope calibrated (rad/s): Q point 9
-// 0x03 mag field calibrated (uTesla): Q point 4
-/// Linear acceleration (m/s^2 minus gravity): Q point 8
-const SENSOR_REPORTID_LINEAR_ACCEL: u8 = 0x04;
+pub const SENSOR_REPORTID_GYROSCOPE: u8 = 0x02;
 
-/// Unit quaternion rotation vector, Q point 12, with heading accuracy estimate (radians)
-const SENSOR_REPORTID_ROTATION_VECTOR: u8 = 0x05;
-const SENSOR_REPORTID_GRAVITY: u8 = 0x06; // Q point 8
+// 0x03 mag field calibrated (uTesla): Q point 4
+pub const SENSOR_REPORTID_MAGNETIC_FIELD: u8 = 0x03;
+
+/// Linear acceleration (m/s^2 minus gravity): Q point 8
+pub const SENSOR_REPORTID_LINEAR_ACCEL: u8 = 0x04;
+
+/// Unit quaternion rotation vector, Q point 14, with heading accuracy estimate (radians) Q point 12
+pub const SENSOR_REPORTID_ROTATION_VECTOR: u8 = 0x05;
+pub const SENSOR_REPORTID_GRAVITY: u8 = 0x06; // Q point 8
 /// Gyroscope uncalibrated (rad/s): Q point 9
-const SENSOR_REPORTID_GYRO: u8 = 0x07;
+pub const SENSOR_REPORTID_GYROSCOPE_UNCALIB: u8 = 0x07;
 // 0x08 game rotation vector : Q point 14
+pub const SENSOR_REPORTID_ROTATION_VECTOR_GAME: u8 = 0x08;
 // 0x09 geomagnetic rotation vector: Q point 14 for quaternion, Q point 12 for heading accuracy
+pub const SENSOR_REPORTID_ROTATION_VECTOR_GEOMAGNETIC: u8 = 0x09;
+
 // 0x0A pressure (hectopascals) from external baro: Q point 20
 // 0x0B ambient light (lux) from external sensor: Q point 8
 // 0x0C humidity (percent) from external sensor: Q point 8
 // 0x0D proximity (centimeters) from external sensor: Q point 4
 // 0x0E temperature (degrees C) from external sensor: Q point 7
+
+const Q_POINTS: [usize; 15] = [0, 8, 9, 4, 8, 14, 8, 9, 14, 14, 0, 0, 0, 0, 0];
+const Q_POINTS2: [usize; 15] = [0, 0, 0, 0, 0, 12, 0, 0, 0, 12, 0, 0, 0, 0, 0];
 
 /// executable/device channel responses
 /// Figure 1-27: SHTP executable commands and response

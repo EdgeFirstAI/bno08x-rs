@@ -1,5 +1,5 @@
 use bno08x::interface::delay::{DelayMs, TimerMs};
-use bno08x::wrapper::BNO08x;
+use bno08x::wrapper::{BNO08x, SENSOR_REPORTID_GRAVITY};
 
 use std::{
     f32::consts::PI,
@@ -31,7 +31,9 @@ fn main() -> io::Result<()> {
     imu_driver
         .enable_rotation_vector(&mut delay_source, 50)
         .unwrap();
-    imu_driver.enable_gravity(&mut delay_source, 50).unwrap();
+    imu_driver
+        .enable_report(&mut delay_source, SENSOR_REPORTID_GRAVITY, 50)
+        .unwrap();
     let loop_interval = 50;
     // println!("loop_interval: {}", loop_interval);
     loop {
