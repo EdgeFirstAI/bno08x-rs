@@ -1,5 +1,5 @@
 use bno08x::interface::delay::{DelayMs, TimerMs};
-use bno08x::wrapper::{BNO08x, SENSOR_REPORTID_GRAVITY};
+use bno08x::wrapper::{BNO08x, SENSOR_REPORTID_ACCELEROMETER, SENSOR_REPORTID_GYROSCOPE, SENSOR_REPORTID_MAGNETIC_FIELD};
 
 use std::{
     f32::consts::PI,
@@ -32,12 +32,18 @@ fn main() -> io::Result<()> {
         .enable_rotation_vector(&mut delay_source, 50)
         .unwrap();
     imu_driver
-        .enable_report(&mut delay_source, SENSOR_REPORTID_GRAVITY, 50)
+        .enable_report(&mut delay_source, SENSOR_REPORTID_ACCELEROMETER, 50)
+        .unwrap();
+    imu_driver
+        .enable_report(&mut delay_source, SENSOR_REPORTID_GYROSCOPE, 50)
+        .unwrap();
+    imu_driver
+        .enable_report(&mut delay_source, SENSOR_REPORTID_MAGNETIC_FIELD, 50)
         .unwrap();
     let loop_interval = 50;
     // println!("loop_interval: {}", loop_interval);
     loop {
-        let _msg_count = imu_driver.handle_all_messages(&mut delay_source, 10);
+        let _msg_count = imu_driver.handle_messages(&mut delay_source, 10, 10);
         // if _msg_count > 0 {
         //     println!("> {}", _msg_count);
         // }
@@ -47,7 +53,15 @@ fn main() -> io::Result<()> {
             "Current rotation: {:?}",
             quaternion_to_euler(qr, qi, qj, qk)
         );
-        let [ax, ay, az] = imu_driver.gravity().unwrap();
-        println!("Gravity: {} {} {}", ax, ay, az);
+        let [ax, ay, az] = imu_driver.accelerometer().unwrap();
+        println!("accelerometer (m/s^2): {} {} {}", ax, ay, az);
+
+        let [gx, gy, gz] = imu_driver.gyro().unwrap();
+        println!("gyroscope (rad/s): {} {} {}", gx, gy, gz);
+
+        let [mx, my, mz] = imu_driver.mag_field().unwrap();
+        println!("magnetometer (uTelsa): {} {} {}", mx, my, mz);
+        
+        
     }
 }
