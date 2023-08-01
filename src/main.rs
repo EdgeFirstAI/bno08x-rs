@@ -61,7 +61,5 @@ fn main() -> io::Result<()> {
 
         let [mx, my, mz] = imu_driver.mag_field().unwrap();
         println!("magnetometer (uTelsa): {} {} {}", mx, my, mz);
-        
-        
     }
 }
