@@ -19,7 +19,7 @@ use core::ops::Shr;
 use std::io;
 
 const PACKET_SEND_BUF_LEN: usize = 256;
-const PACKET_RECV_BUF_LEN: usize = 1024;
+const PACKET_RECV_BUF_LEN: usize = 2048;
 
 const NUM_CHANNELS: usize = 6;
 
@@ -178,7 +178,7 @@ where
         &mut self,
         delay: &mut impl DelayMs,
         timeout_ms: usize,
-        max_count: u32
+        max_count: u32,
     ) -> u32 {
         let mut total_handled: u32 = 0;
         let mut i: u32 = 0;
@@ -537,7 +537,7 @@ where
         let y = q_to_f32(y, Q_POINTS[SENSOR_REPORTID_MAGNETIC_FIELD as usize]);
         let z = q_to_f32(z, Q_POINTS[SENSOR_REPORTID_MAGNETIC_FIELD as usize]);
 
-        self.gravity = [x, y, z];
+        self.mag_field = [x, y, z];
     }
 
     /// Handle one or more errors sent in response to a command
@@ -784,7 +784,7 @@ where
         self.send_packet(CHANNEL_HUB_CONTROL, &cmd_body)?;
         // any error or success in configuration will arrive some time later
         let mut msgs = 0;
-        while !self.report_enabled[report_id as usize] && msgs < 5 {
+        while !self.report_enabled[report_id as usize] && msgs < 20 {
             let rc = self.receive_packet_with_timeout(delay, 250);
             if rc.is_ok() {
                 let received_len = rc.unwrap();
@@ -794,7 +794,7 @@ where
                 msgs += 1;
             }
         }
-        delay.delay_ms(500);
+        delay.delay_ms(100);
         log!(
             "Report {:x} is enabled: {}",
             report_id,

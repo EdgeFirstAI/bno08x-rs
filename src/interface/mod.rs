@@ -54,7 +54,7 @@ pub trait SensorInterface {
 pub use self::spi::SpiInterface;
 
 pub(crate) const PACKET_HEADER_LENGTH: usize = 4;
-pub(crate) const MAX_CARGO_DATA_LENGTH: usize = 32766 - PACKET_HEADER_LENGTH;
+pub(crate) const MAX_CARGO_DATA_LENGTH: usize = 2048 - PACKET_HEADER_LENGTH;
 
 struct SensorCommon {}
 
