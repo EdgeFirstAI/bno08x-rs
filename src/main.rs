@@ -1,5 +1,8 @@
 use bno08x::interface::delay::{DelayMs, TimerMs};
-use bno08x::wrapper::{BNO08x, SENSOR_REPORTID_ACCELEROMETER, SENSOR_REPORTID_GYROSCOPE, SENSOR_REPORTID_MAGNETIC_FIELD};
+use bno08x::wrapper::{
+    BNO08x, SENSOR_REPORTID_ACCELEROMETER, SENSOR_REPORTID_GYROSCOPE,
+    SENSOR_REPORTID_MAGNETIC_FIELD,
+};
 
 use std::{
     f32::consts::PI,
@@ -32,13 +35,13 @@ fn main() -> io::Result<()> {
         .enable_rotation_vector(&mut delay_source, 50)
         .unwrap();
     imu_driver
-        .enable_report(&mut delay_source, SENSOR_REPORTID_ACCELEROMETER, 50)
+        .enable_report(&mut delay_source, SENSOR_REPORTID_ACCELEROMETER, 200)
         .unwrap();
     imu_driver
-        .enable_report(&mut delay_source, SENSOR_REPORTID_GYROSCOPE, 50)
+        .enable_report(&mut delay_source, SENSOR_REPORTID_GYROSCOPE, 200)
         .unwrap();
     imu_driver
-        .enable_report(&mut delay_source, SENSOR_REPORTID_MAGNETIC_FIELD, 50)
+        .enable_report(&mut delay_source, SENSOR_REPORTID_MAGNETIC_FIELD, 200)
         .unwrap();
     let loop_interval = 50;
     // println!("loop_interval: {}", loop_interval);
