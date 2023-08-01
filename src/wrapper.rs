@@ -19,7 +19,7 @@ use core::ops::Shr;
 use std::io;
 
 const PACKET_SEND_BUF_LEN: usize = 256;
-const PACKET_RECV_BUF_LEN: usize = 1024;
+const PACKET_RECV_BUF_LEN: usize = 2048;
 
 const NUM_CHANNELS: usize = 6;
 
