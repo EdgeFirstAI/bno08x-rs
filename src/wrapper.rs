@@ -174,6 +174,28 @@ where
         }
     }
 
+    pub fn handle_messages(
+        &mut self,
+        delay: &mut impl DelayMs,
+        timeout_ms: usize,
+        max_count: u32
+    ) -> u32 {
+        let mut total_handled: u32 = 0;
+        let mut i: u32 = 0;
+        while i < max_count {
+            let handled_count = self.handle_one_message(delay, timeout_ms);
+            if handled_count == 0 || total_handled > max_count {
+                break;
+            } else {
+                total_handled += handled_count;
+                //give some time to other parts of the system
+                delay.delay_ms(1);
+            }
+            i += 1
+        }
+        total_handled
+    }
+
     /// Handle any messages with a timeout
     pub fn handle_all_messages(
         &mut self,
