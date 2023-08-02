@@ -17,6 +17,7 @@ use crate::log;
 
 use core::ops::Shr;
 use std::io;
+use std::time::Instant;
 
 const PACKET_SEND_BUF_LEN: usize = 256;
 const PACKET_RECV_BUF_LEN: usize = 2048;
@@ -783,15 +784,16 @@ where
         // let _size = self.send_packet(CHANNEL_HUB_CONTROL, &cmd_body)?;
         self.send_packet(CHANNEL_HUB_CONTROL, &cmd_body)?;
         // any error or success in configuration will arrive some time later
-        let mut msgs = 0;
-        while !self.report_enabled[report_id as usize] && msgs < 20 {
+        let start = Instant::now();
+        while !self.report_enabled[report_id as usize]
+            && start.elapsed().as_millis() < 2000
+        {
             let rc = self.receive_packet_with_timeout(delay, 250);
             if rc.is_ok() {
                 let received_len = rc.unwrap();
                 if received_len > 0 {
                     self.handle_received_packet(received_len);
                 }
-                msgs += 1;
             }
         }
         delay.delay_ms(100);
