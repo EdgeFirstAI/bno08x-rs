@@ -1,6 +1,9 @@
 use bno08x::interface::delay::{DelayMs, TimerMs};
 use bno08x::wrapper::{
-    BNO08x, SENSOR_REPORTID_ACCELEROMETER, SENSOR_REPORTID_GYROSCOPE,
+    BNO08x, 
+    SENSOR_REPORTID_ROTATION_VECTOR, 
+    SENSOR_REPORTID_ACCELEROMETER, 
+    SENSOR_REPORTID_GYROSCOPE,
     SENSOR_REPORTID_MAGNETIC_FIELD,
 };
 
@@ -31,18 +34,26 @@ fn main() -> io::Result<()> {
         BNO08x::new_bno08x("/dev/spidev1.0", "/dev/gpiochip5", 2, 0)?;
     let mut delay_source = TimerMs {};
     imu_driver.init(&mut delay_source).unwrap();
-    imu_driver
-        .enable_rotation_vector(&mut delay_source, 50)
+    let rot_enabled: bool = imu_driver
+        .enable_report(&mut delay_source, SENSOR_REPORTID_ROTATION_VECTOR, 120)
         .unwrap();
-    imu_driver
-        .enable_report(&mut delay_source, SENSOR_REPORTID_ACCELEROMETER, 200)
+    println!("Rotation Enabled: {}", rot_enabled);
+
+    let acc_enabled: bool = imu_driver
+        .enable_report(&mut delay_source, SENSOR_REPORTID_ACCELEROMETER, 120)
         .unwrap();
-    imu_driver
-        .enable_report(&mut delay_source, SENSOR_REPORTID_GYROSCOPE, 200)
+    println!("Acceleration Enabled: {}", acc_enabled);
+
+    let gyro_enabled: bool = imu_driver
+        .enable_report(&mut delay_source, SENSOR_REPORTID_GYROSCOPE, 120)
         .unwrap();
-    imu_driver
-        .enable_report(&mut delay_source, SENSOR_REPORTID_MAGNETIC_FIELD, 200)
+    println!("Gyroscope Enabled: {}", gyro_enabled);
+
+    let mag_enabled: bool = imu_driver
+        .enable_report(&mut delay_source, SENSOR_REPORTID_MAGNETIC_FIELD, 120)
         .unwrap();
+    println!("Magnetometer Enabled: {}", mag_enabled);
+
     let loop_interval = 50;
     // println!("loop_interval: {}", loop_interval);
     loop {
@@ -56,6 +67,10 @@ fn main() -> io::Result<()> {
             "Current rotation: {:?}",
             quaternion_to_euler(qr, qi, qj, qk)
         );
+
+        let rot_acc: f32 = imu_driver.rotation_acc();
+        println!("Rotation Accuracy {}", rot_acc);
+
         let [ax, ay, az] = imu_driver.accelerometer().unwrap();
         println!("accelerometer (m/s^2): {} {} {}", ax, ay, az);
 
