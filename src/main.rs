@@ -1,10 +1,7 @@
 use bno08x::interface::delay::{DelayMs, TimerMs};
 use bno08x::wrapper::{
-    BNO08x, 
-    SENSOR_REPORTID_ROTATION_VECTOR, 
-    SENSOR_REPORTID_ACCELEROMETER, 
-    SENSOR_REPORTID_GYROSCOPE,
-    SENSOR_REPORTID_MAGNETIC_FIELD,
+    BNO08x, SENSOR_REPORTID_ACCELEROMETER, SENSOR_REPORTID_GYROSCOPE,
+    SENSOR_REPORTID_MAGNETIC_FIELD, SENSOR_REPORTID_ROTATION_VECTOR,
 };
 
 use std::{
@@ -31,7 +28,8 @@ fn quaternion_to_euler(qr: f32, qi: f32, qj: f32, qk: f32) -> [f32; 3] {
 
 fn main() -> io::Result<()> {
     let mut imu_driver =
-        BNO08x::new_bno08x("/dev/spidev1.0", "/dev/gpiochip5", 2, 0)?;
+        BNO08x::new_bno08x_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
+
     let mut delay_source = TimerMs {};
     imu_driver.init(&mut delay_source).unwrap();
     let rot_enabled: bool = imu_driver

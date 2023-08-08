@@ -13,10 +13,10 @@ use crate::interface::spi::SpiControlLines;
 use crate::interface::spidev::SpiDevice;
 use crate::interface::{SensorInterface, SpiInterface, PACKET_HEADER_LENGTH};
 use crate::log;
-// use embedded_hal::blocking::delay::DelayMs;
+use crate::wrapper::io::Error;
 
 use core::ops::Shr;
-use std::io;
+use std::io::{self, ErrorKind};
 use std::time::Instant;
 
 const PACKET_SEND_BUF_LEN: usize = 256;
@@ -155,6 +155,51 @@ impl BNO08x<SpiInterface<SpiDevice, GpiodIn, GpiodOut>> {
             BNO08x::new_with_interface(spi_int);
 
         Ok(imu_driver)
+    }
+
+    pub fn new_bno08x_from_symbol(
+        spidevice: &str,
+        hintn_pin: &str,
+        reset_pin: &str,
+    ) -> io::Result<BNO08x<SpiInterface<SpiDevice, GpiodIn, GpiodOut>>> {
+        let gpio_chips = gpiod::Chip::list_devices()?;
+        let mut gpio_chip = String::from("");
+        let mut hintn_num = 0;
+        let mut hintn_found = false;
+        let mut reset_num = 0;
+        let mut reset_found = false;
+        'outer: for entry in gpio_chips {
+            let mut _chip = gpiod::Chip::new(&entry)?;
+            for i in 0.._chip.num_lines() {
+                if !hintn_found && _chip.line_info(i)?.name == hintn_pin {
+                    gpio_chip = entry.display().to_string();
+                    hintn_num = i;
+                    hintn_found = true;
+                } else if !reset_found && _chip.line_info(i)?.name == reset_pin
+                {
+                    gpio_chip = entry.display().to_string();
+                    reset_num = i;
+                    reset_found = true;
+                }
+                log!("--- {} ---", _chip.line_info(i)?.name);
+                if reset_found && hintn_found {
+                    break 'outer;
+                }
+            }
+        }
+        if !hintn_found {
+            return Err(Error::new(
+                ErrorKind::AddrNotAvailable,
+                format!("Did not find hintn pin \"{}\"", hintn_pin),
+            ));
+        }
+        if !reset_found {
+            return Err(Error::new(
+                ErrorKind::AddrNotAvailable,
+                format!("Did not find reset pin \"{}\"", reset_pin),
+            ));
+        }
+        Self::new_bno08x(spidevice, gpio_chip.as_str(), hintn_num, reset_num)
     }
 }
 

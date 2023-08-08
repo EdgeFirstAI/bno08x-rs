@@ -1,9 +1,6 @@
 // extern crate gpiod;
 use ::std::ops::Not;
-use gpiod::{
-    Chip, Input, Lines, Options,
-    Output,
-};
+use gpiod::{Chip, Input, Lines, Options, Output};
 use std::io;
 pub enum PinState {
     /// Low pin state
@@ -78,7 +75,7 @@ impl GpiodOut {
     pub fn new(chip: &Chip, pin: u32) -> io::Result<GpiodOut> {
         let opts = Options::output([pin]) // configure lines offsets
             .values([false]) // optionally set initial values
-            .consumer("my-outputs"); // optionally set consumer string
+            .consumer("imu-driver"); // optionally set consumer string
 
         Ok(GpiodOut {
             output: chip.request_lines(opts)?,
@@ -105,7 +102,7 @@ pub struct GpiodIn {
 impl GpiodIn {
     pub fn new(chip: &Chip, pin: u32) -> io::Result<GpiodIn> {
         let opts = Options::input([pin]) // configure lines offsets
-            .consumer("my-outputs"); // optionally set consumer string
+            .consumer("imu-driver"); // optionally set consumer string
 
         Ok(GpiodIn {
             input: chip.request_lines(opts)?,
