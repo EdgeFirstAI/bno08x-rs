@@ -136,17 +136,30 @@ impl<SI> BNO08x<SI> {
 impl BNO08x<SpiInterface<SpiDevice, GpiodIn, GpiodOut>> {
     pub fn new_bno08x(
         spidevice: &str,
-        gpiochip: &str,
+        hintn_gpiochip: &str,
         hintn_pin: u32,
+        reset_gpiochip: &str,
         reset_pin: u32,
     ) -> io::Result<BNO08x<SpiInterface<SpiDevice, GpiodIn, GpiodOut>>> {
-        let mut _chip = gpiod::Chip::new(gpiochip)?;
+        let hintn: GpiodIn;
+        let reset: GpiodOut;
+        if hintn_gpiochip == reset_gpiochip {
+            let mut _chip = gpiod::Chip::new(hintn_gpiochip)?;
+            hintn = GpiodIn::new(&_chip, hintn_pin)?;
+            reset = GpiodOut::new(&_chip, reset_pin)?;
+        } else {
+            let mut _chip0 = gpiod::Chip::new(hintn_gpiochip)?;
+            hintn = GpiodIn::new(&_chip0, hintn_pin)?;
+            let mut _chip1 = gpiod::Chip::new(reset_gpiochip)?;
+            reset = GpiodOut::new(&_chip1, reset_pin)?;
+        }
+
         let mut _spidev = SpiDevice::new(spidevice)?;
         let ctrl_lines: SpiControlLines<SpiDevice, GpiodIn, GpiodOut> =
             SpiControlLines::<SpiDevice, GpiodIn, GpiodOut> {
                 spi: _spidev,
-                hintn: GpiodIn::new(&_chip, hintn_pin)?,
-                reset: GpiodOut::new(&_chip, reset_pin)?,
+                hintn: hintn,
+                reset: reset,
             };
 
         let spi_int: SpiInterface<SpiDevice, GpiodIn, GpiodOut> =
@@ -163,21 +176,22 @@ impl BNO08x<SpiInterface<SpiDevice, GpiodIn, GpiodOut>> {
         reset_pin: &str,
     ) -> io::Result<BNO08x<SpiInterface<SpiDevice, GpiodIn, GpiodOut>>> {
         let gpio_chips = gpiod::Chip::list_devices()?;
-        let mut gpio_chip = String::from("");
+        let mut hintn_gpio_chip = String::from("");
         let mut hintn_num = 0;
         let mut hintn_found = false;
+        let mut reset_gpio_chip = String::from("");
         let mut reset_num = 0;
         let mut reset_found = false;
         'outer: for entry in gpio_chips {
             let mut _chip = gpiod::Chip::new(&entry)?;
             for i in 0.._chip.num_lines() {
                 if !hintn_found && _chip.line_info(i)?.name == hintn_pin {
-                    gpio_chip = entry.display().to_string();
+                    hintn_gpio_chip = entry.display().to_string();
                     hintn_num = i;
                     hintn_found = true;
                 } else if !reset_found && _chip.line_info(i)?.name == reset_pin
                 {
-                    gpio_chip = entry.display().to_string();
+                    reset_gpio_chip = entry.display().to_string();
                     reset_num = i;
                     reset_found = true;
                 }
@@ -199,7 +213,13 @@ impl BNO08x<SpiInterface<SpiDevice, GpiodIn, GpiodOut>> {
                 format!("Did not find reset pin \"{}\"", reset_pin),
             ));
         }
-        Self::new_bno08x(spidevice, gpio_chip.as_str(), hintn_num, reset_num)
+        Self::new_bno08x(
+            spidevice,
+            hintn_gpio_chip.as_str(),
+            hintn_num,
+            reset_gpio_chip.as_str(),
+            reset_num,
+        )
     }
 }
 
