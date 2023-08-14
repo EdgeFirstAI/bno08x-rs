@@ -942,8 +942,9 @@ where
             frs_type.shr(8) as u8,   // FRS Type MSB
         ];
         let _ = self.send_packet(CHANNEL_HUB_CONTROL, cmd_body_req.as_ref())?;
+        self.frs_write_status = FRS_STATUS_NO_DATA;
         let mut start = Instant::now();
-        while self.frs_write_status != 4
+        while self.frs_write_status == FRS_STATUS_NO_DATA
             && start.elapsed().as_millis() < timeout
         {
             let rc = self.receive_packet_with_timeout(delay, 250);
@@ -960,7 +961,7 @@ where
             return Ok(false);
         }
         println!("FRS Write ready");
-        delay.delay_ms(200);
+        delay.delay_ms(150);
         let mut offset: u16 = 0;
         let q30_qi = f32_to_q(qi, 30);
         let q30_qj = f32_to_q(qj, 30);
@@ -981,8 +982,12 @@ where
             q30_qj[3],               // FRS data1 MSB
         ];
         _ = self.send_packet(CHANNEL_HUB_CONTROL, cmd_body_data.as_ref())?;
+
+        self.frs_write_status = FRS_STATUS_NO_DATA;
         start = Instant::now();
-        while start.elapsed().as_millis() < 800 {
+        while self.frs_write_status == FRS_STATUS_NO_DATA
+            && start.elapsed().as_millis() < 800
+        {
             let rc = self.receive_packet_with_timeout(delay, 250);
             if rc.is_ok() {
                 let received_len = rc.unwrap();
@@ -991,7 +996,7 @@ where
                 }
             }
         }
-        delay.delay_ms(200);
+        delay.delay_ms(150);
         offset += 2;
         cmd_body_data = [
             SHUB_FRS_WRITE_DATA_REQ, //request product ID
@@ -1008,8 +1013,12 @@ where
             q30_qr[3],               // FRS data1 MSB
         ];
         _ = self.send_packet(CHANNEL_HUB_CONTROL, cmd_body_data.as_ref())?;
+        self.frs_write_status = FRS_STATUS_NO_DATA;
         start = Instant::now();
-        while start.elapsed().as_millis() < timeout {
+        while self.frs_write_status != FRS_STATUS_WRITE_FAILED
+            && self.frs_write_status != FRS_STATUS_WRITE_COMPLETE
+            && start.elapsed().as_millis() < 800
+        {
             let rc = self.receive_packet_with_timeout(delay, 250);
             if rc.is_ok() {
                 let received_len = rc.unwrap();
@@ -1019,8 +1028,11 @@ where
             }
         }
         delay.delay_ms(100);
-
-        Ok(true)
+        if self.frs_write_status == FRS_STATUS_WRITE_COMPLETE {
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     /// Prepare a packet for sending, in our send buffer
@@ -1053,9 +1065,16 @@ where
         let packet_length = self.prep_send_packet(channel, body_data);
         // log!("Sending {:?}", &self.packet_send_buf[..packet_length]);
 
-        self.sensor_interface
-            .write_packet(&self.packet_send_buf[..packet_length])
+        let rc = self
+            .sensor_interface
+            .send_and_receive_packet(
+                &self.packet_send_buf[..packet_length],
+                &mut self.packet_recv_buf,
+            )
             .map_err(WrapperError::CommError)?;
+        if rc > 0 {
+            self.handle_received_packet(rc);
+        }
         Ok(packet_length)
     }
 
@@ -1225,7 +1244,7 @@ fn q_to_f32(q_val: i16, q_point: usize) -> f32 {
 }
 
 fn f32_to_q(f32_val: f32, q_point: usize) -> [u8; 4] {
-    ((f32_val as f64 * (1.shl(q_point) as f64)) as i32).to_be_bytes()
+    ((f32_val as f64 * (1.shl(q_point) as f64)) as i32).to_le_bytes()
 }
 // The BNO080 supports six communication channels:
 const CHANNEL_COMMAND: u8 = 0;

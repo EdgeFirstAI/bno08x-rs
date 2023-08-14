@@ -52,6 +52,7 @@ impl Transfer for SpiDevice {
     ) -> Result<&[u8], Self::Error> {
         let mut rx_buf = vec![0_u8; words.len()];
         let buf = rx_buf.as_mut();
+        log!("Transfer write: {:?}", words);
         let mut transfer = SpidevTransfer::read_write(words, buf);
         self.spi.transfer(&mut transfer)?;
         words.clone_from_slice(buf);
