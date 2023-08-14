@@ -17,6 +17,7 @@ use crate::wrapper::io::Error;
 
 use core::ops::Shr;
 use std::io::{self, ErrorKind};
+use std::ops::Shl;
 use std::time::Instant;
 
 const PACKET_SEND_BUF_LEN: usize = 256;
@@ -55,6 +56,9 @@ pub struct BNO08x<SI> {
 
     /// have we received the full advertisement
     advert_received: bool,
+
+    /// is the device ready to do an FRS write
+    frs_write_status: u8,
 
     /// have we received an error list
     error_list_received: bool,
@@ -105,6 +109,7 @@ impl<SI> BNO08x<SI> {
             last_packet_len_received: 0,
             device_reset: false,
             prod_id_verified: false,
+            frs_write_status: FRS_STATUS_NO_DATA,
             init_received: false,
             advert_received: false,
             error_list_received: false,
@@ -596,7 +601,7 @@ where
         self.uncalib_gryo = [x, y, z];
     }
 
-    /// Given a set of magnetic field values in the Q-fixed-point format,
+    /// Given a set of magnetic field values in the Q-fixed-point format,0xF7
     /// calculate and update the corresponding float values
     fn update_magnetic_field_calib(&mut self, x: i16, y: i16, z: i16) {
         let x = q_to_f32(x, Q_POINTS[SENSOR_REPORTID_MAGNETIC_FIELD as usize]);
@@ -605,7 +610,25 @@ where
 
         self.mag_field = [x, y, z];
     }
-
+    fn _frs_status_to_str(&self, status: &u8) -> &'static str {
+        let s: u8 = *status;
+        match s {
+            FRS_STATUS_WORD_RECIEVED => {"word(s) received"},
+            FRS_STATUS_UNRECOGNIZED_FRS_TYPE => {"unrecognized FRS type"},
+            FRS_STATUS_BUSY => {"busy"},
+            FRS_STATUS_WRITE_COMPLETE => {"write completed"},
+            FRS_STATUS_WRITE_READY => {"write mode entered or ready"},
+            FRS_STATUS_WRITE_FAILED => {"write failed"},
+            FRS_STATUS_DATA_RECV_NOT_IN_WRITE_MODE => {"data received while not in write mode"},
+            FRS_STATUS_INVALID_LENGTH => {"invalid length"},
+            FRS_STATUS_RECORD_VALID => {"record valid (the complete record passed internal validation checks)"},
+            FRS_STATUS_RECORD_INVALID => {"record invalid (the complete record failed internal validation checks)"},
+            FRS_STATUS_DEVICE_ERROR => {"device error (DFU flash memory device unavailable)"},
+            FRS_STATUS_READONLY => {"record is read only"},
+            FRS_STATUS_NO_DATA => {"no FRS status recieved"},
+            _ => {"reserved"},
+        }
+    }
     /// Handle one or more errors sent in response to a command
     fn handle_cmd_resp_error_list(&mut self, received_len: usize) {
         let payload_len = received_len - PACKET_HEADER_LENGTH;
@@ -696,6 +719,31 @@ where
                         // 0xFC
                         log!("feat resp: {}", msg[5]);
                         self.report_enabled[msg[5] as usize] = true;
+                    }
+                    SHUB_FRS_WRITE_RESP => {
+                        //0xF5
+                        log!(
+                            "write resp: {}",
+                            self._frs_status_to_str(&msg[5])
+                        );
+                        let status = msg[5];
+                        self.frs_write_status = status
+                        // match status {
+                        //     0 => {
+                        //         println!(
+                        //             "Recieved word, offset = {}",
+                        //             msg[4 + 2] as u32
+                        //                 + ((msg[4 + 3] as u32) << 8)
+                        //         )
+                        //     }
+                        //     3 | 5 => {
+                        //         self.frs_write_status = false;
+                        //     }
+                        //     4 => {
+                        //         self.frs_write_status = true;
+                        //     }
+                        //     _ => {}
+                        // }
                     }
                     _ => {
                         log!(
@@ -871,6 +919,107 @@ where
             eprintln!("Could not enable report id: {}", report_id);
             return Ok(false);
         }
+        Ok(true)
+    }
+
+    pub fn set_sensor_orientation(
+        &mut self,
+        qi: f32,
+        qj: f32,
+        qk: f32,
+        qr: f32,
+        delay: &mut impl DelayMs,
+        timeout: u128,
+    ) -> Result<bool, WrapperError<SE>> {
+        let length: u16 = 4;
+        let frs_type: u16 = 0x2D3E;
+        let cmd_body_req: [u8; 6] = [
+            SHUB_FRS_WRITE_REQ,      //request product ID
+            0,                       //reserved
+            (length & 0xFF) as u8,   // length LSB
+            length.shr(8) as u8,     // length MSB
+            (frs_type & 0xFF) as u8, // FRS Type LSB
+            frs_type.shr(8) as u8,   // FRS Type MSB
+        ];
+        let _ = self.send_packet(CHANNEL_HUB_CONTROL, cmd_body_req.as_ref())?;
+        let mut start = Instant::now();
+        while self.frs_write_status != 4
+            && start.elapsed().as_millis() < timeout
+        {
+            let rc = self.receive_packet_with_timeout(delay, 250);
+            if rc.is_ok() {
+                let received_len = rc.unwrap();
+                if received_len > 0 {
+                    self.handle_received_packet(received_len);
+                }
+            }
+        }
+
+        if self.frs_write_status != FRS_STATUS_WRITE_READY {
+            println!("FRS Write not ready");
+            return Ok(false);
+        }
+        println!("FRS Write ready");
+        delay.delay_ms(200);
+        let mut offset: u16 = 0;
+        let q30_qi = f32_to_q(qi, 30);
+        let q30_qj = f32_to_q(qj, 30);
+        let q30_qk = f32_to_q(qk, 30);
+        let q30_qr = f32_to_q(qr, 30);
+        let mut cmd_body_data: [u8; 12] = [
+            SHUB_FRS_WRITE_DATA_REQ, //request product ID
+            0,                       //reserved
+            (offset & 0xFF) as u8,   // length LSB
+            offset.shr(8) as u8,     // length MSB
+            q30_qi[0],               // FRS data0 LSB
+            q30_qi[1],               //
+            q30_qi[2],               //
+            q30_qi[3],               // FRS data1 MSB
+            q30_qj[0],               // FRS data0 LSB
+            q30_qj[1],               //
+            q30_qj[2],               //
+            q30_qj[3],               // FRS data1 MSB
+        ];
+        _ = self.send_packet(CHANNEL_HUB_CONTROL, cmd_body_data.as_ref())?;
+        start = Instant::now();
+        while start.elapsed().as_millis() < 800 {
+            let rc = self.receive_packet_with_timeout(delay, 250);
+            if rc.is_ok() {
+                let received_len = rc.unwrap();
+                if received_len > 0 {
+                    self.handle_received_packet(received_len);
+                }
+            }
+        }
+        delay.delay_ms(200);
+        offset += 2;
+        cmd_body_data = [
+            SHUB_FRS_WRITE_DATA_REQ, //request product ID
+            0,                       //reserved
+            (offset & 0xFF) as u8,   // length LSB
+            offset.shr(8) as u8,     // length MSB
+            q30_qk[0],               // FRS data0 LSB
+            q30_qk[1],               //
+            q30_qk[2],               //
+            q30_qk[3],               // FRS data1 MSB
+            q30_qr[0],               // FRS data0 LSB
+            q30_qr[1],               //
+            q30_qr[2],               //
+            q30_qr[3],               // FRS data1 MSB
+        ];
+        _ = self.send_packet(CHANNEL_HUB_CONTROL, cmd_body_data.as_ref())?;
+        start = Instant::now();
+        while start.elapsed().as_millis() < timeout {
+            let rc = self.receive_packet_with_timeout(delay, 250);
+            if rc.is_ok() {
+                let received_len = rc.unwrap();
+                if received_len > 0 {
+                    self.handle_received_packet(received_len);
+                }
+            }
+        }
+        delay.delay_ms(100);
+
         Ok(true)
     }
 
@@ -1072,9 +1221,12 @@ where
 }
 
 fn q_to_f32(q_val: i16, q_point: usize) -> f32 {
-    (q_val as f32) / ((1 << q_point) as f32)
+    (q_val as f32) / (1.shl(q_point) as f32)
 }
 
+fn f32_to_q(f32_val: f32, q_point: usize) -> [u8; 4] {
+    ((f32_val as f64 * (1.shl(q_point) as f64)) as i32).to_be_bytes()
+}
 // The BNO080 supports six communication channels:
 const CHANNEL_COMMAND: u8 = 0;
 /// the SHTP command channel
@@ -1109,6 +1261,9 @@ const SHUB_REPORT_SET_FEATURE_CMD: u8 = 0xFD;
 // const SHUB_FORCE_SENSOR_FLUSH: u8 = 0xF0;
 const SHUB_COMMAND_RESP: u8 = 0xF1;
 //const SHUB_COMMAND_REQ:u8 =  0xF2;
+const SHUB_FRS_WRITE_REQ: u8 = 0xF7;
+const SHUB_FRS_WRITE_DATA_REQ: u8 = 0xF6;
+const SHUB_FRS_WRITE_RESP: u8 = 0xF5;
 
 // some mysterious responses we sometimes get:
 // 0x78, 0x7C
@@ -1141,6 +1296,21 @@ pub const SENSOR_REPORTID_ROTATION_VECTOR_GEOMAGNETIC: u8 = 0x09;
 // 0x0D proximity (centimeters) from external sensor: Q point 4
 // 0x0E temperature (degrees C) from external sensor: Q point 7
 
+pub const FRS_STATUS_WORD_RECIEVED: u8 = 0;
+pub const FRS_STATUS_UNRECOGNIZED_FRS_TYPE: u8 = 1;
+pub const FRS_STATUS_BUSY: u8 = 2;
+pub const FRS_STATUS_WRITE_COMPLETE: u8 = 3;
+pub const FRS_STATUS_WRITE_READY: u8 = 4;
+pub const FRS_STATUS_WRITE_FAILED: u8 = 5;
+pub const FRS_STATUS_DATA_RECV_NOT_IN_WRITE_MODE: u8 = 6;
+pub const FRS_STATUS_INVALID_LENGTH: u8 = 7;
+pub const FRS_STATUS_RECORD_VALID: u8 = 8;
+pub const FRS_STATUS_RECORD_INVALID: u8 = 9;
+pub const FRS_STATUS_DEVICE_ERROR: u8 = 10;
+pub const FRS_STATUS_READONLY: u8 = 11;
+pub const FRS_STATUS_RESERVED: u8 = 12;
+pub const FRS_STATUS_NO_DATA: u8 = u8::MAX;
+
 const Q_POINTS: [usize; 15] = [0, 8, 9, 4, 8, 14, 8, 9, 14, 14, 0, 0, 0, 0, 0];
 const Q_POINTS2: [usize; 15] = [0, 0, 0, 0, 0, 12, 0, 0, 0, 12, 0, 0, 0, 0, 0];
 
@@ -1164,56 +1334,22 @@ const SH2_STARTUP_INIT_UNSOLICITED: u8 =
 #[cfg(test)]
 mod tests {
     // use super::*;
-    use crate::interface::i2c::DEFAULT_ADDRESS;
-    use crate::interface::mock_i2c_port::FakeI2cPort;
-    use crate::wrapper::{q14_to_f32, BNO08x, Q14_SCALE};
-
-    use crate::interface::I2cInterface;
-
-    fn f32_to_q14(input: f32) -> i16 {
-        (input / Q14_SCALE) as i16
-    }
+    use crate::interface::delay::TimerMs;
+    use crate::wrapper::f32_to_q;
+    use crate::wrapper::BNO08x;
 
     #[test]
-    fn test_qval_conversions() {
-        let q_val = f32_to_q14(0.5);
-        let float_val = q14_to_f32(q_val);
-        assert_eq!(float_val, 0.5);
-    }
-
-    #[test]
-    fn test_foo() {
-        let mut mock_i2c_port = FakeI2cPort::new();
-
-        let packet = ADVERTISING_PACKET_FULL;
-        mock_i2c_port.add_available_packet(&packet);
-
-        let mut shub = BNO08x::new_with_interface(I2cInterface::new(
-            mock_i2c_port,
-            DEFAULT_ADDRESS,
-        ));
-        let rc = shub.receive_packet();
-
-        assert!(rc.is_ok());
-        let next_packet_size = rc.unwrap_or(0);
-        assert_eq!(next_packet_size, packet.len(), "wrong length");
-    }
-
-    #[test]
-    fn test_handle_adv_message() {
-        let mut mock_i2c_port = FakeI2cPort::new();
-
-        //actual startup response packet
-        let raw_packet = ADVERTISING_PACKET_FULL;
-        mock_i2c_port.add_available_packet(&raw_packet);
-
-        let mut shub = BNO08x::new_with_interface(I2cInterface::new(
-            mock_i2c_port,
-            DEFAULT_ADDRESS,
-        ));
-
-        let msg_count = shub.handle_one_message();
-        assert_eq!(msg_count, 1, "wrong msg_count");
+    fn test_f32_to_q() {
+        assert_eq!(
+            [0x10, 0x00, 0x00, 0x00],
+            f32_to_q(0.25, 30),
+            "Wrong positive q point value"
+        );
+        assert_eq!(
+            [0xf0, 0x00, 0x00, 0x00],
+            f32_to_q(-0.25, 30),
+            "Wrong negative q point value"
+        );
     }
 
     // Actual advertising packet received from sensor:

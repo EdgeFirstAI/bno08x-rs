@@ -63,6 +63,7 @@ impl Transfer for SpiDevice {
 impl Write for SpiDevice {
     type Error = io::Error;
     fn write(&mut self, words: &[u8]) -> Result<(), Self::Error> {
+        log!("Write: {:?}", words);
         let mut rx_buf = vec![0_u8; words.len()];
         let buf = rx_buf.as_mut();
         let mut transfer = SpidevTransfer::read_write(words, buf);
