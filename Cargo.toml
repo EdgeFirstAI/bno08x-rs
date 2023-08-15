@@ -10,6 +10,10 @@ readme = "README.md"
 name = "bno08x"
 path = "src/main.rs"
 
+[[bin]]
+name = "bno08x-frs"
+path = "src/frs.rs"
+
 [lib]
 name = "bno08x"
 path = "src/lib.rs"
