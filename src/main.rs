@@ -52,6 +52,7 @@ fn main() -> io::Result<()> {
             println!("Could not enable report {}", r);
             return Ok(());
         }
+        println!("Report {} is enabled", r);
         delay_source.delay_ms(1000);
     }
 
@@ -70,17 +71,17 @@ fn main() -> io::Result<()> {
             imu_driver.report_update_time(SENSOR_REPORTID_ROTATION_VECTOR)
         );
 
-        // let rot_acc: f32 = imu_driver.rotation_acc();
-        // println!("Rotation Accuracy {}", rot_acc);
+        let rot_acc: f32 = imu_driver.rotation_acc();
+        println!("Rotation Accuracy {}", rot_acc);
 
-        // let [ax, ay, az] = imu_driver.accelerometer().unwrap();
-        // println!("accelerometer (m/s^2): {} {} {}", ax, ay, az);
+        let [ax, ay, az] = imu_driver.accelerometer().unwrap();
+        println!("accelerometer (m/s^2): {} {} {}", ax, ay, az);
 
-        // let [gx, gy, gz] = imu_driver.gyro().unwrap();
-        // println!("gyroscope (rad/s): {} {} {}", gx, gy, gz);
+        let [gx, gy, gz] = imu_driver.gyro().unwrap();
+        println!("gyroscope (rad/s): {} {} {}", gx, gy, gz);
 
-        // let [mx, my, mz] = imu_driver.mag_field().unwrap();
-        // println!("magnetometer (uTelsa): {} {} {}", mx, my, mz);
+        let [mx, my, mz] = imu_driver.mag_field().unwrap();
+        println!("magnetometer (uTelsa): {} {} {}", mx, my, mz);
     }
     Ok(())
 }
