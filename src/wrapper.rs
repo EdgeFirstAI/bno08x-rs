@@ -18,7 +18,7 @@ use crate::wrapper::io::Error;
 use core::ops::Shr;
 use std::io::{self, ErrorKind};
 use std::ops::Shl;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 const PACKET_SEND_BUF_LEN: usize = 256;
 const PACKET_RECV_BUF_LEN: usize = 2048;
@@ -97,6 +97,9 @@ pub struct BNO08x<SI> {
     mag_field: [f32; 3],
 
     report_enabled: [bool; 16],
+
+    /// When the last update for a report was, compare using
+    report_update_time: [u128; 16],
 }
 
 impl<SI> BNO08x<SI> {
@@ -129,6 +132,7 @@ impl<SI> BNO08x<SI> {
             uncalib_gryo: [0.0; 3],
             mag_field: [0.0; 3],
             report_enabled: [false; 16],
+            report_update_time: [0; 16],
         }
     }
 
@@ -421,38 +425,52 @@ where
                 );
             outer_cursor = inner_cursor;
             // report_count += 1;
+            let timestamp: u128;
+            match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
+                Ok(n) => timestamp = n.as_nanos(),
+                Err(_) => timestamp = 0,
+            }
             match report_id {
                 SENSOR_REPORTID_ACCELEROMETER => {
+                    self.report_update_time[report_id as usize] = timestamp;
                     self.update_accelerometer(data1, data2, data3);
                 }
                 SENSOR_REPORTID_ROTATION_VECTOR => {
+                    self.report_update_time[report_id as usize] = timestamp;
                     self.update_rotation_quaternion(
                         data1, data2, data3, data4, data5,
                     );
                 }
                 SENSOR_REPORTID_ROTATION_VECTOR_GAME => {
+                    self.report_update_time[report_id as usize] = timestamp;
                     self.update_rotation_quaternion_game(
                         data1, data2, data3, data4,
                     );
                 }
                 SENSOR_REPORTID_ROTATION_VECTOR_GEOMAGNETIC => {
+                    self.report_update_time[report_id as usize] = timestamp;
                     self.update_rotation_quaternion_geomag(
                         data1, data2, data3, data4, data5,
                     );
                 }
                 SENSOR_REPORTID_LINEAR_ACCEL => {
+                    self.report_update_time[report_id as usize] = timestamp;
                     self.update_linear_accel(data1, data2, data3);
                 }
                 SENSOR_REPORTID_GRAVITY => {
+                    self.report_update_time[report_id as usize] = timestamp;
                     self.update_gravity(data1, data2, data3);
                 }
                 SENSOR_REPORTID_GYROSCOPE => {
+                    self.report_update_time[report_id as usize] = timestamp;
                     self.update_gyro_calib(data1, data2, data3);
                 }
                 SENSOR_REPORTID_GYROSCOPE_UNCALIB => {
+                    self.report_update_time[report_id as usize] = timestamp;
                     self.update_gyro_uncalib(data1, data2, data3);
                 }
                 SENSOR_REPORTID_MAGNETIC_FIELD => {
+                    self.report_update_time[report_id as usize] = timestamp;
                     self.update_magnetic_field_calib(data1, data2, data3);
                 }
 
@@ -861,6 +879,18 @@ where
             millis_between_reports,
         )
     }
+    pub fn report_update_time(&mut self, report_id: u8) -> u128 {
+        if report_id as usize <= self.report_enabled.len() {
+            return self.report_update_time[report_id as usize];
+        }
+        return 0;
+    }
+    pub fn is_report_enabled(&mut self, report_id: u8) -> bool {
+        if report_id as usize <= self.report_enabled.len() {
+            return self.report_enabled[report_id as usize];
+        }
+        return false;
+    }
 
     /// Enable a particular report. Returns True if the report was successfully enabled. Otherwise returns False.
     pub fn enable_report(
@@ -892,7 +922,6 @@ where
             0,
             0, // MSB sensor-specific config
         ];
-
         //we simply blast out this configuration command and assume it'll succeed
         // let _size = self.send_packet(CHANNEL_HUB_CONTROL, &cmd_body)?;
         self.send_packet(CHANNEL_HUB_CONTROL, &cmd_body)?;
@@ -909,14 +938,13 @@ where
                 }
             }
         }
-        delay.delay_ms(100);
+        delay.delay_ms(200);
         log!(
             "Report {:x} is enabled: {}",
             report_id,
             self.report_enabled[report_id as usize]
         );
         if !self.report_enabled[report_id as usize] {
-            eprintln!("Could not enable report id: {}", report_id);
             return Ok(false);
         }
         Ok(true)

@@ -33,60 +33,54 @@ fn main() -> io::Result<()> {
     let mut delay_source = TimerMs {};
     imu_driver.init(&mut delay_source).unwrap();
 
-    let acc_enabled: bool = imu_driver
-        .enable_report(&mut delay_source, SENSOR_REPORTID_ACCELEROMETER, 120)
-        .unwrap();
-    println!("Acceleration Enabled: {}", acc_enabled);
+    let max_tries = 5;
 
-    imu_driver.set_sensor_orientation(
-        0.5,
-        0.5,
-        0.5,
-        -0.5,
-        &mut delay_source,
-        2000,
-    );
+    let reports = [
+        (SENSOR_REPORTID_ROTATION_VECTOR, 100),
+        (SENSOR_REPORTID_ACCELEROMETER, 300),
+        (SENSOR_REPORTID_GYROSCOPE, 300),
+        (SENSOR_REPORTID_MAGNETIC_FIELD, 300),
+    ];
+    for (r, t) in reports {
+        let mut i = 0;
+        while i < max_tries && !imu_driver.is_report_enabled(r) {
+            imu_driver.enable_report(&mut delay_source, r, t).unwrap();
+            i += 1;
+        }
 
-    let rot_enabled: bool = imu_driver
-        .enable_report(&mut delay_source, SENSOR_REPORTID_ROTATION_VECTOR, 120)
-        .unwrap();
-    println!("Rotation Enabled: {}", rot_enabled);
+        if !imu_driver.is_report_enabled(r) {
+            println!("Could not enable report {}", r);
+            return Ok(());
+        }
+        delay_source.delay_ms(1000);
+    }
 
-    let gyro_enabled: bool = imu_driver
-        .enable_report(&mut delay_source, SENSOR_REPORTID_GYROSCOPE, 120)
-        .unwrap();
-    println!("Gyroscope Enabled: {}", gyro_enabled);
-
-    let mag_enabled: bool = imu_driver
-        .enable_report(&mut delay_source, SENSOR_REPORTID_MAGNETIC_FIELD, 120)
-        .unwrap();
-    println!("Magnetometer Enabled: {}", mag_enabled);
-
-    let loop_interval = 50;
+    let loop_interval = 100;
     println!("loop_interval: {}", loop_interval);
     loop {
-        let _msg_count = imu_driver.handle_messages(&mut delay_source, 10, 10);
+        let _msg_count = imu_driver.handle_messages(&mut delay_source, 10, 20);
         // if _msg_count > 0 {
         //     println!("> {}", _msg_count);
         // }
         delay_source.delay_ms(loop_interval);
         let [qi, qj, qk, qr] = imu_driver.rotation_quaternion().unwrap();
         println!(
-            "Current rotation: {:?}",
-            quaternion_to_euler(qr, qi, qj, qk)
+            "Current rotation: {:?} time of last update: {}",
+            quaternion_to_euler(qr, qi, qj, qk),
+            imu_driver.report_update_time(SENSOR_REPORTID_ROTATION_VECTOR)
         );
 
-        let rot_acc: f32 = imu_driver.rotation_acc();
-        println!("Rotation Accuracy {}", rot_acc);
+        // let rot_acc: f32 = imu_driver.rotation_acc();
+        // println!("Rotation Accuracy {}", rot_acc);
 
-        let [ax, ay, az] = imu_driver.accelerometer().unwrap();
-        println!("accelerometer (m/s^2): {} {} {}", ax, ay, az);
+        // let [ax, ay, az] = imu_driver.accelerometer().unwrap();
+        // println!("accelerometer (m/s^2): {} {} {}", ax, ay, az);
 
-        let [gx, gy, gz] = imu_driver.gyro().unwrap();
-        println!("gyroscope (rad/s): {} {} {}", gx, gy, gz);
+        // let [gx, gy, gz] = imu_driver.gyro().unwrap();
+        // println!("gyroscope (rad/s): {} {} {}", gx, gy, gz);
 
-        let [mx, my, mz] = imu_driver.mag_field().unwrap();
-        println!("magnetometer (uTelsa): {} {} {}", mx, my, mz);
+        // let [mx, my, mz] = imu_driver.mag_field().unwrap();
+        // println!("magnetometer (uTelsa): {} {} {}", mx, my, mz);
     }
     Ok(())
 }
