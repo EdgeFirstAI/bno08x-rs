@@ -954,10 +954,10 @@ where
         }
 
         if self.frs_write_status != FRS_STATUS_WRITE_READY {
-            println!("FRS Write not ready");
+            log!("FRS Write not ready");
             return Ok(false);
         }
-        println!("FRS Write ready");
+        log!("FRS Write ready");
         delay_ms(150);
         let mut offset: u16 = 0;
         let q30_qi = f32_to_q(qi, 30);
