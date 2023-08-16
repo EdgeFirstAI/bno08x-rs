@@ -9,18 +9,16 @@ use std::{
 };
 
 const RAD_TO_DEG: f32 = 180f32 / PI;
+// https://stackoverflow.com/a/37560411
 fn quaternion_to_euler(qr: f32, qi: f32, qj: f32, qk: f32) -> [f32; 3] {
-    let sqr = qr * qr;
-    let sqi = qi * qi;
-    let sqj = qj * qj;
-    let sqk = qk * qk;
-
-    let yaw =
-        (2.0 * (qi * qj + qk * qr)).atan2(sqi - sqj - sqk + sqr) * RAD_TO_DEG;
-    let pitch = (-2.0 * (qi * qk - qj * qr) / (sqi + sqj + sqk + sqr)).asin()
+    let yaw = (2.0 * (qk * qr + qi * qj))
+        .atan2(-1.0 + 2.0 * (qr * qr + qi * qi))
         * RAD_TO_DEG;
-    let roll =
-        (2.0 * (qj * qk + qi * qr)).atan2(-sqi - sqj + sqk + sqr) * RAD_TO_DEG;
+    let pitch = (2.0 * (qj * qr - qk * qi)).asin() * RAD_TO_DEG;
+
+    let roll = (2.0 * (qk * qj + qr * qi))
+        .atan2(1.0 - 2.0 * (qi * qi + qj * qj))
+        * RAD_TO_DEG;
 
     return [yaw, pitch, roll];
 }
