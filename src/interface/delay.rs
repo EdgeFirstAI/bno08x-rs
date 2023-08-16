@@ -12,16 +12,8 @@
 /// `UXX` denotes the range type of the delay time. `UXX` can be `u8`, `u16`, etc. A single type can
 /// implement this trait for different types of `UXX`.
 use std::{thread, time::Duration};
-pub trait DelayMs {
-    /// Pauses execution for `ms` milliseconds
-    fn delay_ms(&mut self, ms: usize);
-}
 
-pub struct TimerMs {}
-
-impl DelayMs for TimerMs {
-    fn delay_ms(&mut self, ms: usize) {
-        let time = Duration::from_millis(ms as u64);
-        thread::sleep(time);
-    }
+pub fn delay_ms(ms: usize) {
+    let time = Duration::from_millis(ms as u64);
+    thread::sleep(time);
 }

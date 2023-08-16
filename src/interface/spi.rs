@@ -1,5 +1,5 @@
 use super::SensorInterface;
-use crate::interface::delay::DelayMs;
+use crate::interface::delay::delay_ms;
 use crate::interface::gpio::{InputPin, OutputPin};
 use crate::interface::spidev::{Transfer, Write};
 use crate::interface::{SensorCommon, PACKET_HEADER_LENGTH};
@@ -63,16 +63,12 @@ where
     /// After reset this can take around 120 ms
     /// Return true if the sensor is awake, false if it doesn't wake up
     /// `max_ms` maximum milliseconds to await for HINTN change
-    fn wait_for_sensor_awake(
-        &mut self,
-        delay_source: &mut impl DelayMs,
-        max_ms: usize,
-    ) -> bool {
+    fn wait_for_sensor_awake(&mut self, max_ms: usize) -> bool {
         for _ in 0..max_ms {
             if self.hintn_signaled() {
                 return true;
             }
-            delay_source.delay_ms(1);
+            delay_ms(1);
         }
 
         false
@@ -84,6 +80,7 @@ where
             if self.hintn_signaled() {
                 return true;
             }
+            delay_ms(1);
         }
 
         log!("no hintn??");
@@ -108,10 +105,7 @@ where
         false
     }
 
-    fn setup(
-        &mut self,
-        delay_source: &mut impl DelayMs,
-    ) -> Result<(), Self::SensorError> {
+    fn setup(&mut self) -> Result<(), Self::SensorError> {
         // Deselect sensor
         // self.csn.set_high().map_err(Error::Pin)?;
         // Note: This assumes that WAK/PS0 is set to high already
@@ -123,11 +117,11 @@ where
         // reset cycle
 
         self.reset.set_low().map_err(Error::Pin)?;
-        delay_source.delay_ms(2);
+        delay_ms(2);
         self.reset.set_high().map_err(Error::Pin)?;
 
         // wait for sensor to set hintn pin after reset
-        let ready = self.wait_for_sensor_awake(delay_source, 200);
+        let ready = self.wait_for_sensor_awake(200);
         if !ready {
             eprintln!("Setup: sensor not ready");
             return Err(SensorUnresponsive);
@@ -164,6 +158,7 @@ where
             // TODO: throw Err()
             eprintln!("Total packet length greater than recv buffer size");
         }
+        delay_ms(5);
         let rc = self.spi.transfer(&mut recv_buf[..total_packet_len]);
         if !rc.is_err() {
             read_packet_len = SensorCommon::parse_packet_header(
@@ -213,6 +208,7 @@ where
         for i in recv_buf[..read_packet_len].iter_mut() {
             *i = 0;
         }
+        delay_ms(5);
         let rc = self.spi.transfer(&mut recv_buf[..read_packet_len]);
         if !rc.is_err() {
             read_packet_len = SensorCommon::parse_packet_header(
@@ -230,10 +226,9 @@ where
     fn read_with_timeout(
         &mut self,
         recv_buf: &mut [u8],
-        delay_source: &mut impl DelayMs,
         max_ms: usize,
     ) -> Result<usize, Self::SensorError> {
-        if self.wait_for_sensor_awake(delay_source, max_ms) {
+        if self.wait_for_sensor_awake(max_ms) {
             return self.read_packet(recv_buf);
         }
         // log!("Sensor did not wake for read");

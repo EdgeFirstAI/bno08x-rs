@@ -5,9 +5,7 @@ pub mod log;
 pub mod spi;
 pub mod spidev;
 
-use crate::interface::delay::DelayMs;
 use core::ops::Shl;
-// use embedded_hal::blocking::delay::DelayMs;
 
 /// A method of communicating with the sensor
 pub trait SensorInterface {
@@ -15,10 +13,7 @@ pub trait SensorInterface {
     type SensorError;
 
     /// give the sensor interface a chance to set up
-    fn setup(
-        &mut self,
-        delay_source: &mut impl DelayMs,
-    ) -> Result<(), Self::SensorError>;
+    fn setup(&mut self) -> Result<(), Self::SensorError>;
 
     /// Write the whole packet provided
     fn write_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError>;
@@ -35,7 +30,6 @@ pub trait SensorInterface {
     fn read_with_timeout(
         &mut self,
         recv_buf: &mut [u8],
-        delay_source: &mut impl DelayMs,
         max_ms: usize,
     ) -> Result<usize, Self::SensorError>;
 

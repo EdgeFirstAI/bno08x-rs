@@ -6,8 +6,7 @@ LICENSE: BSD3 (see LICENSE file)
 /*
 Modified 2023 Au-Zone Technologies
 */
-
-use crate::interface::delay::DelayMs;
+use crate::interface::delay::delay_ms;
 use crate::interface::gpio::{GpiodIn, GpiodOut};
 use crate::interface::spi::SpiControlLines;
 use crate::interface::spidev::SpiDevice;
@@ -238,33 +237,32 @@ where
     SE: core::fmt::Debug,
 {
     /// Consume all available messages on the port without processing them
-    pub fn eat_all_messages(&mut self, delay: &mut impl DelayMs) {
+    pub fn eat_all_messages(&mut self) {
         loop {
-            let msg_count = self.eat_one_message(delay);
+            let msg_count = self.eat_one_message();
             if msg_count == 0 {
                 break;
             }
             //give some time to other parts of the system
-            delay.delay_ms(1);
+            delay_ms(1);
         }
     }
 
     pub fn handle_messages(
         &mut self,
-        delay: &mut impl DelayMs,
         timeout_ms: usize,
         max_count: u32,
     ) -> u32 {
         let mut total_handled: u32 = 0;
         let mut i: u32 = 0;
         while i < max_count {
-            let handled_count = self.handle_one_message(delay, timeout_ms);
+            let handled_count = self.handle_one_message(timeout_ms);
             if handled_count == 0 || total_handled > max_count {
                 break;
             } else {
                 total_handled += handled_count;
                 //give some time to other parts of the system
-                delay.delay_ms(1);
+                delay_ms(1);
             }
             i += 1
         }
@@ -272,34 +270,26 @@ where
     }
 
     /// Handle any messages with a timeout
-    pub fn handle_all_messages(
-        &mut self,
-        delay: &mut impl DelayMs,
-        timeout_ms: usize,
-    ) -> u32 {
+    pub fn handle_all_messages(&mut self, timeout_ms: usize) -> u32 {
         let mut total_handled: u32 = 0;
         loop {
-            let handled_count = self.handle_one_message(delay, timeout_ms);
+            let handled_count = self.handle_one_message(timeout_ms);
             if handled_count == 0 {
                 break;
             } else {
                 total_handled += handled_count;
                 //give some time to other parts of the system
-                delay.delay_ms(1);
+                delay_ms(1);
             }
         }
         total_handled
     }
 
     /// return the number of messages handled
-    pub fn handle_one_message(
-        &mut self,
-        delay: &mut impl DelayMs,
-        max_ms: usize,
-    ) -> u32 {
+    pub fn handle_one_message(&mut self, max_ms: usize) -> u32 {
         let mut msg_count = 0;
 
-        let res = self.receive_packet_with_timeout(delay, max_ms);
+        let res = self.receive_packet_with_timeout(max_ms);
         if res.is_ok() {
             let received_len = res.unwrap_or(0);
             if received_len > 0 {
@@ -316,8 +306,8 @@ where
     /// Receive and ignore one message,
     /// returning the size of the packet received or zero
     /// if there was no packet to read.
-    pub fn eat_one_message(&mut self, delay: &mut impl DelayMs) -> usize {
-        let res = self.receive_packet_with_timeout(delay, 150);
+    pub fn eat_one_message(&mut self) -> usize {
+        let res = self.receive_packet_with_timeout(150);
         return if let Ok(received_len) = res {
             received_len
         } else {
@@ -785,43 +775,40 @@ where
 
     /// The BNO080 starts up with all sensors disabled,
     /// waiting for the application to configure it.
-    pub fn init(
-        &mut self,
-        delay_source: &mut impl DelayMs,
-    ) -> Result<(), WrapperError<SE>> {
+    pub fn init(&mut self) -> Result<(), WrapperError<SE>> {
         log!("wrapper init");
 
         //Section 5.1.1.1 : On system startup, the SHTP control application will send
         // its full advertisement response, unsolicited, to the host.
-        delay_source.delay_ms(1);
+        delay_ms(1);
         self.sensor_interface
-            .setup(delay_source)
+            .setup()
             .map_err(WrapperError::CommError)?;
 
         if self.sensor_interface.requires_soft_reset() {
-            delay_source.delay_ms(1);
+            delay_ms(1);
             self.soft_reset()?;
-            delay_source.delay_ms(250);
-            self.eat_all_messages(delay_source);
-            delay_source.delay_ms(250);
-            self.eat_all_messages(delay_source);
+            delay_ms(250);
+            self.eat_all_messages();
+            delay_ms(250);
+            self.eat_all_messages();
         } else {
             // we only expect two messages after reset:
             // eat the advertisement response
-            delay_source.delay_ms(250);
+            delay_ms(250);
             log!("Eating advertisement response");
-            self.handle_one_message(delay_source, 20);
+            self.handle_one_message(20);
             log!("Eating reset response");
-            delay_source.delay_ms(250);
-            self.handle_one_message(delay_source, 20);
+            delay_ms(250);
+            self.handle_one_message(20);
             // eat the unsolicited initialization response
             // log!("Eating initialization response");
             // Further reads don't respond if we uncomment this
-            // delay_source.delay_ms(255);
-            // self.handle_one_message(delay_source, 255);
+            // delay_ms(255);
+            // self.handle_one_message(255);
         }
-        self.verify_product_id(delay_source)?;
-        delay_source.delay_ms(100);
+        self.verify_product_id()?;
+        delay_ms(100);
         Ok(())
     }
 
@@ -831,11 +818,9 @@ where
     /// Returns True if the report was successfully enabled. Otherwise returns False.
     pub fn enable_rotation_vector(
         &mut self,
-        delay: &mut impl DelayMs,
         millis_between_reports: u16,
     ) -> Result<bool, WrapperError<SE>> {
         self.enable_report(
-            delay,
             SENSOR_REPORTID_ROTATION_VECTOR,
             millis_between_reports,
         )
@@ -844,40 +829,25 @@ where
     /// Enables reporting of linear acceleration vector. Returns True if the report was successfully enabled. Otherwise returns False.
     pub fn enable_linear_accel(
         &mut self,
-        delay: &mut impl DelayMs,
         millis_between_reports: u16,
     ) -> Result<bool, WrapperError<SE>> {
-        self.enable_report(
-            delay,
-            SENSOR_REPORTID_LINEAR_ACCEL,
-            millis_between_reports,
-        )
+        self.enable_report(SENSOR_REPORTID_LINEAR_ACCEL, millis_between_reports)
     }
 
     /// Enables reporting of gyroscope data. Returns True if the report was successfully enabled. Otherwise returns False.
     pub fn enable_gyro(
         &mut self,
-        delay: &mut impl DelayMs,
         millis_between_reports: u16,
     ) -> Result<bool, WrapperError<SE>> {
-        self.enable_report(
-            delay,
-            SENSOR_REPORTID_GYROSCOPE,
-            millis_between_reports,
-        )
+        self.enable_report(SENSOR_REPORTID_GYROSCOPE, millis_between_reports)
     }
 
     /// Enables reporting of linear acceleration vector. Returns True if the report was successfully enabled. Otherwise returns False.
     pub fn enable_gravity(
         &mut self,
-        delay: &mut impl DelayMs,
         millis_between_reports: u16,
     ) -> Result<bool, WrapperError<SE>> {
-        self.enable_report(
-            delay,
-            SENSOR_REPORTID_GRAVITY,
-            millis_between_reports,
-        )
+        self.enable_report(SENSOR_REPORTID_GRAVITY, millis_between_reports)
     }
     pub fn report_update_time(&mut self, report_id: u8) -> u128 {
         if report_id as usize <= self.report_enabled.len() {
@@ -895,7 +865,6 @@ where
     /// Enable a particular report. Returns True if the report was successfully enabled. Otherwise returns False.
     pub fn enable_report(
         &mut self,
-        delay: &mut impl DelayMs,
         report_id: u8,
         millis_between_reports: u16,
     ) -> Result<bool, WrapperError<SE>> {
@@ -930,7 +899,7 @@ where
         while !self.report_enabled[report_id as usize]
             && start.elapsed().as_millis() < 2000
         {
-            let rc = self.receive_packet_with_timeout(delay, 250);
+            let rc = self.receive_packet_with_timeout(250);
             if rc.is_ok() {
                 let received_len = rc.unwrap();
                 if received_len > 0 {
@@ -938,13 +907,14 @@ where
                 }
             }
         }
-        delay.delay_ms(200);
+        delay_ms(200);
         log!(
             "Report {:x} is enabled: {}",
             report_id,
             self.report_enabled[report_id as usize]
         );
         if !self.report_enabled[report_id as usize] {
+            // eprintln!("Could not enable report id: {}", report_id);
             return Ok(false);
         }
         Ok(true)
@@ -956,7 +926,6 @@ where
         qj: f32,
         qk: f32,
         qr: f32,
-        delay: &mut impl DelayMs,
         timeout: u128,
     ) -> Result<bool, WrapperError<SE>> {
         let length: u16 = 4;
@@ -975,7 +944,7 @@ where
         while self.frs_write_status == FRS_STATUS_NO_DATA
             && start.elapsed().as_millis() < timeout
         {
-            let rc = self.receive_packet_with_timeout(delay, 250);
+            let rc = self.receive_packet_with_timeout(250);
             if rc.is_ok() {
                 let received_len = rc.unwrap();
                 if received_len > 0 {
@@ -989,7 +958,7 @@ where
             return Ok(false);
         }
         println!("FRS Write ready");
-        delay.delay_ms(150);
+        delay_ms(150);
         let mut offset: u16 = 0;
         let q30_qi = f32_to_q(qi, 30);
         let q30_qj = f32_to_q(qj, 30);
@@ -1016,7 +985,7 @@ where
         while self.frs_write_status == FRS_STATUS_NO_DATA
             && start.elapsed().as_millis() < 800
         {
-            let rc = self.receive_packet_with_timeout(delay, 250);
+            let rc = self.receive_packet_with_timeout(250);
             if rc.is_ok() {
                 let received_len = rc.unwrap();
                 if received_len > 0 {
@@ -1024,7 +993,7 @@ where
                 }
             }
         }
-        delay.delay_ms(150);
+        delay_ms(150);
         offset += 2;
         cmd_body_data = [
             SHUB_FRS_WRITE_DATA_REQ, //request product ID
@@ -1047,7 +1016,7 @@ where
             && self.frs_write_status != FRS_STATUS_WRITE_COMPLETE
             && start.elapsed().as_millis() < 800
         {
-            let rc = self.receive_packet_with_timeout(delay, 250);
+            let rc = self.receive_packet_with_timeout(250);
             if rc.is_ok() {
                 let received_len = rc.unwrap();
                 if received_len > 0 {
@@ -1055,7 +1024,7 @@ where
                 }
             }
         }
-        delay.delay_ms(100);
+        delay_ms(100);
         if self.frs_write_status == FRS_STATUS_WRITE_COMPLETE {
             Ok(true)
         } else {
@@ -1109,14 +1078,13 @@ where
     /// Read one packet into the receive buffer
     pub(crate) fn receive_packet_with_timeout(
         &mut self,
-        delay: &mut impl DelayMs,
         max_ms: usize,
     ) -> Result<usize, WrapperError<SE>> {
         self.packet_recv_buf[0] = 0;
         self.packet_recv_buf[1] = 0;
         let packet_len = self
             .sensor_interface
-            .read_with_timeout(&mut self.packet_recv_buf, delay, max_ms)
+            .read_with_timeout(&mut self.packet_recv_buf, max_ms)
             .map_err(WrapperError::CommError)?;
 
         self.last_packet_len_received = packet_len;
@@ -1125,10 +1093,7 @@ where
     }
 
     /// Verify that the sensor returns an expected chip ID
-    fn verify_product_id(
-        &mut self,
-        delay: &mut impl DelayMs,
-    ) -> Result<(), WrapperError<SE>> {
+    fn verify_product_id(&mut self) -> Result<(), WrapperError<SE>> {
         log!("request PID...");
         let cmd_body: [u8; 2] = [
             SHUB_PROD_ID_REQ, //request product ID
@@ -1151,7 +1116,7 @@ where
         // process all incoming messages until we get a product id (or no more data)
         while !self.prod_id_verified {
             log!("read PID");
-            let msg_count = self.handle_one_message(delay, 150);
+            let msg_count = self.handle_one_message(150);
             if msg_count < 1 {
                 break;
             }
