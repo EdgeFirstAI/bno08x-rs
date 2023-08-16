@@ -2,7 +2,7 @@ extern crate spidev;
 
 use spidev::{SpiModeFlags, Spidev, SpidevOptions, SpidevTransfer};
 
-use crate::interface::delay::delay_ms;
+
 use crate::log;
 use std::path::Path;
 use std::{io, vec};

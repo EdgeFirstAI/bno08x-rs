@@ -1,4 +1,4 @@
-use bno08x::interface::delay::delay_ms;
+
 use bno08x::wrapper::{BNO08x, SENSOR_REPORTID_ACCELEROMETER};
 use std::io;
 
@@ -14,6 +14,6 @@ fn main() -> io::Result<()> {
         .unwrap();
     println!("Acceleration Enabled: {}", acc_enabled);
 
-    let success = imu_driver.set_sensor_orientation(0.5, 0.5, 0.5, -0.5, 2000);
+    let _success = imu_driver.set_sensor_orientation(0.5, 0.5, 0.5, -0.5, 2000);
     Ok(())
 }
