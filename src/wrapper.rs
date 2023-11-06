@@ -15,6 +15,7 @@ use crate::log;
 use crate::wrapper::io::Error;
 
 use core::ops::Shr;
+use std::collections::HashMap;
 use std::io::{self, ErrorKind};
 use std::ops::Shl;
 use std::time::{Instant, SystemTime};
@@ -99,6 +100,9 @@ pub struct BNO08x<SI> {
 
     /// When the last update for a report was, compare using
     report_update_time: [u128; 16],
+
+    /// Sensor update callbacks
+    report_update_callbacks: [HashMap<String, Box<dyn Fn(&Self) -> ()>>; 16],
 }
 
 impl<SI> BNO08x<SI> {
@@ -132,6 +136,7 @@ impl<SI> BNO08x<SI> {
             mag_field: [0.0; 3],
             report_enabled: [false; 16],
             report_update_time: [0; 16],
+            report_update_callbacks: std::array::from_fn(|_| HashMap::new()),
         }
     }
 
@@ -379,6 +384,14 @@ where
         (cursor, feature_report_id, data1, data2, data3, data4, data5)
     }
 
+    fn handle_sensor_report_update(&mut self, report_id: u8, timestamp: u128) {
+        self.report_update_time[report_id as usize] = timestamp;
+        for (_, val) in self.report_update_callbacks[report_id as usize].iter()
+        {
+            val(self);
+        }
+    }
+
     /// Handle parsing of an input report packet,
     /// which may include multiple input reports
     fn handle_sensor_reports(&mut self, received_len: usize) {
@@ -422,46 +435,46 @@ where
             }
             match report_id {
                 SENSOR_REPORTID_ACCELEROMETER => {
-                    self.report_update_time[report_id as usize] = timestamp;
                     self.update_accelerometer(data1, data2, data3);
+                    self.handle_sensor_report_update(report_id, timestamp)
                 }
                 SENSOR_REPORTID_ROTATION_VECTOR => {
-                    self.report_update_time[report_id as usize] = timestamp;
                     self.update_rotation_quaternion(
                         data1, data2, data3, data4, data5,
                     );
+                    self.handle_sensor_report_update(report_id, timestamp)
                 }
                 SENSOR_REPORTID_ROTATION_VECTOR_GAME => {
-                    self.report_update_time[report_id as usize] = timestamp;
                     self.update_rotation_quaternion_game(
                         data1, data2, data3, data4,
                     );
+                    self.handle_sensor_report_update(report_id, timestamp)
                 }
                 SENSOR_REPORTID_ROTATION_VECTOR_GEOMAGNETIC => {
-                    self.report_update_time[report_id as usize] = timestamp;
                     self.update_rotation_quaternion_geomag(
                         data1, data2, data3, data4, data5,
                     );
+                    self.handle_sensor_report_update(report_id, timestamp)
                 }
                 SENSOR_REPORTID_LINEAR_ACCEL => {
-                    self.report_update_time[report_id as usize] = timestamp;
                     self.update_linear_accel(data1, data2, data3);
+                    self.handle_sensor_report_update(report_id, timestamp)
                 }
                 SENSOR_REPORTID_GRAVITY => {
-                    self.report_update_time[report_id as usize] = timestamp;
                     self.update_gravity(data1, data2, data3);
+                    self.handle_sensor_report_update(report_id, timestamp)
                 }
                 SENSOR_REPORTID_GYROSCOPE => {
-                    self.report_update_time[report_id as usize] = timestamp;
                     self.update_gyro_calib(data1, data2, data3);
+                    self.handle_sensor_report_update(report_id, timestamp)
                 }
                 SENSOR_REPORTID_GYROSCOPE_UNCALIB => {
-                    self.report_update_time[report_id as usize] = timestamp;
                     self.update_gyro_uncalib(data1, data2, data3);
+                    self.handle_sensor_report_update(report_id, timestamp)
                 }
                 SENSOR_REPORTID_MAGNETIC_FIELD => {
-                    self.report_update_time[report_id as usize] = timestamp;
                     self.update_magnetic_field_calib(data1, data2, data3);
+                    self.handle_sensor_report_update(report_id, timestamp)
                 }
 
                 _ => {
@@ -659,6 +672,12 @@ where
                 received_len, PACKET_RECV_BUF_LEN
             );
             _rec_len = PACKET_RECV_BUF_LEN;
+        } else if _rec_len < PACKET_HEADER_LENGTH {
+            eprintln!(
+                "Packet length of {} was ignored. Shorter than header length of {}",
+                received_len, PACKET_HEADER_LENGTH
+            );
+            return;
         }
         let msg = &self.packet_recv_buf[.._rec_len];
         let chan_num = msg[2];
@@ -849,19 +868,37 @@ where
     ) -> Result<bool, WrapperError<SE>> {
         self.enable_report(SENSOR_REPORTID_GRAVITY, millis_between_reports)
     }
-    pub fn report_update_time(&mut self, report_id: u8) -> u128 {
+    pub fn report_update_time(&self, report_id: u8) -> u128 {
         if report_id as usize <= self.report_enabled.len() {
             return self.report_update_time[report_id as usize];
         }
         return 0;
     }
-    pub fn is_report_enabled(&mut self, report_id: u8) -> bool {
+    pub fn is_report_enabled(&self, report_id: u8) -> bool {
         if report_id as usize <= self.report_enabled.len() {
             return self.report_enabled[report_id as usize];
         }
         return false;
     }
 
+    pub fn add_sensor_report_callback(
+        &mut self,
+        report_id: u8,
+        key: String,
+        func: impl Fn(&Self) + 'static,
+    ) {
+        self.report_update_callbacks[report_id as usize]
+            .entry(key)
+            .or_insert_with(|| Box::new(func));
+    }
+
+    pub fn remove_sensor_report_callback(
+        &mut self,
+        report_id: u8,
+        key: String,
+    ) {
+        self.report_update_callbacks[report_id as usize].remove(&key);
+    }
     /// Enable a particular report. Returns True if the report was successfully enabled. Otherwise returns False.
     pub fn enable_report(
         &mut self,
