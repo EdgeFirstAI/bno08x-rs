@@ -37,7 +37,7 @@ pub enum WrapperError<E> {
     NoDataAvailable,
 }
 
-pub struct BNO08x<SI> {
+pub struct BNO08x<'a, SI> {
     pub(crate) sensor_interface: SI,
     /// each communication channel with the device has its own sequence number
     sequence_numbers: [u8; NUM_CHANNELS],
@@ -102,10 +102,11 @@ pub struct BNO08x<SI> {
     report_update_time: [u128; 16],
 
     /// Sensor update callbacks
-    report_update_callbacks: [HashMap<String, Box<dyn Fn(&Self) -> ()>>; 16],
+    report_update_callbacks:
+        [HashMap<String, Box<dyn Fn(&Self) -> () + 'a>>; 16],
 }
 
-impl<SI> BNO08x<SI> {
+impl<'a, SI> BNO08x<'a, SI> {
     pub fn new_with_interface(sensor_interface: SI) -> Self {
         Self {
             sensor_interface,
@@ -146,14 +147,15 @@ impl<SI> BNO08x<SI> {
     }
 }
 
-impl BNO08x<SpiInterface<SpiDevice, GpiodIn, GpiodOut>> {
+impl<'a> BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>> {
     pub fn new_bno08x(
         spidevice: &str,
         hintn_gpiochip: &str,
         hintn_pin: u32,
         reset_gpiochip: &str,
         reset_pin: u32,
-    ) -> io::Result<BNO08x<SpiInterface<SpiDevice, GpiodIn, GpiodOut>>> {
+    ) -> io::Result<BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>>>
+    {
         let hintn: GpiodIn;
         let reset: GpiodOut;
         if hintn_gpiochip == reset_gpiochip {
@@ -187,7 +189,8 @@ impl BNO08x<SpiInterface<SpiDevice, GpiodIn, GpiodOut>> {
         spidevice: &str,
         hintn_pin: &str,
         reset_pin: &str,
-    ) -> io::Result<BNO08x<SpiInterface<SpiDevice, GpiodIn, GpiodOut>>> {
+    ) -> io::Result<BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>>>
+    {
         let gpio_chips = gpiod::Chip::list_devices()?;
         let mut hintn_gpio_chip = String::from("");
         let mut hintn_num = 0;
@@ -236,7 +239,7 @@ impl BNO08x<SpiInterface<SpiDevice, GpiodIn, GpiodOut>> {
     }
 }
 
-impl<SI, SE> BNO08x<SI>
+impl<'a, SI, SE> BNO08x<'a, SI>
 where
     SI: SensorInterface<SensorError = SE>,
     SE: core::fmt::Debug,
@@ -885,7 +888,7 @@ where
         &mut self,
         report_id: u8,
         key: String,
-        func: impl Fn(&Self) + 'static,
+        func: impl Fn(&Self) + 'a,
     ) {
         self.report_update_callbacks[report_id as usize]
             .entry(key)
