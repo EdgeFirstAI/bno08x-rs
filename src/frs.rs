@@ -1,4 +1,3 @@
-
 use bno08x::wrapper::{BNO08x, SENSOR_REPORTID_ACCELEROMETER};
 use std::io;
 

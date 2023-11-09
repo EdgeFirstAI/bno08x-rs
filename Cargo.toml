@@ -1,8 +1,8 @@
 [package]
 name = "bno08x"
-description = "BNO08x IMU Driver for ADIS"
+description = "BNO08x IMU Driver for Maivin"
 repository = "https://bitbucket.org/au-zone/bno08x-rs/src/master/"
-version = "0.0.1"
+version = "1.0.0"
 edition = "2021"
 readme = "README.md"
 

@@ -2,7 +2,6 @@ extern crate spidev;
 
 use spidev::{SpiModeFlags, Spidev, SpidevOptions, SpidevTransfer};
 
-
 use crate::log;
 use std::path::Path;
 use std::{io, vec};
