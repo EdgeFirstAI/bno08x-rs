@@ -1,7 +1,6 @@
 // pub mod i2c;
 pub mod delay;
 pub mod gpio;
-pub mod log;
 pub mod spi;
 pub mod spidev;
 

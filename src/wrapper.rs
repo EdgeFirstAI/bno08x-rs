@@ -11,9 +11,8 @@ use crate::interface::gpio::{GpiodIn, GpiodOut};
 use crate::interface::spi::SpiControlLines;
 use crate::interface::spidev::SpiDevice;
 use crate::interface::{SensorInterface, SpiInterface, PACKET_HEADER_LENGTH};
-use crate::log;
 use crate::wrapper::io::Error;
-use log::{trace, warn};
+use log::{debug, trace, warn};
 
 use core::ops::Shr;
 use std::collections::HashMap;
@@ -213,7 +212,7 @@ impl<'a> BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>> {
                     reset_num = i;
                     reset_found = true;
                 }
-                log!("--- {} ---", _chip.line_info(i)?.name);
+                trace!("--- {} ---", _chip.line_info(i)?.name);
                 if reset_found && hintn_found {
                     break 'outer;
                 }
@@ -312,7 +311,7 @@ where
                 };
             }
         } else {
-            log!("handle1 err {:?}", res);
+            trace!("handle1 err {:?}", res);
         }
 
         msg_count
@@ -326,7 +325,7 @@ where
         return if let Ok(received_len) = res {
             received_len
         } else {
-            log!("e1 err {:?}", res);
+            trace!("e1 err {:?}", res);
             0
         };
     }
@@ -420,7 +419,7 @@ where
 
         let payload_len = received_len - outer_cursor;
         if payload_len < 10 {
-            log!(
+            trace!(
                 "bad report: {:?}",
                 &self.packet_recv_buf[..PACKET_HEADER_LENGTH]
             );
@@ -488,8 +487,8 @@ where
                 }
 
                 _ => {
-                    // debug_log!("uhr: {:X}", report_id);
-                    // debug_log!("uhr: 0x{:X} {:?}  ", report_id, &self.packet_recv_buf[start_cursor..start_cursor+5]);
+                    // trace!("uhr: {:X}", report_id);
+                    // trace!("uhr: 0x{:X} {:?}  ", report_id, &self.packet_recv_buf[start_cursor..start_cursor+5]);
                 }
             }
         }
@@ -513,7 +512,7 @@ where
         q_r: i16,
         q_a: i16,
     ) {
-        //debug_log!("rquat {} {} {} {} {}", q_i, q_j, q_k, q_r, q_a);
+        //trace!("rquat {} {} {} {} {}", q_i, q_j, q_k, q_r, q_a);
         self.rotation_quaternion = [
             q_to_f32(q_i, Q_POINTS[SENSOR_REPORTID_ROTATION_VECTOR as usize]),
             q_to_f32(q_j, Q_POINTS[SENSOR_REPORTID_ROTATION_VECTOR as usize]),
@@ -534,7 +533,7 @@ where
         q_r: i16,
         q_a: i16,
     ) {
-        //debug_log!("rquat {} {} {} {} {}", q_i, q_j, q_k, q_r, q_a);
+        //trace!("rquat {} {} {} {} {}", q_i, q_j, q_k, q_r, q_a);
         self.geomag_rotation_quaternion = [
             q_to_f32(
                 q_i,
@@ -568,7 +567,7 @@ where
         q_k: i16,
         q_r: i16,
     ) {
-        //debug_log!("rquat {} {} {} {} {}", q_i, q_j, q_k, q_r, q_a);
+        //trace!("rquat {} {} {} {} {}", q_i, q_j, q_k, q_r, q_a);
         self.game_rotation_quaternion = [
             q_to_f32(
                 q_i,
@@ -716,7 +715,7 @@ where
                     );
                 }
                 _ => {
-                    trace!("Unknown error code {}", err);
+                    debug!("Unknown error code {}", err);
                 }
             }
         }
@@ -748,7 +747,7 @@ where
         } else {
             0
         };
-        // log!("packet: {:?}", &self.packet_recv_buf[..received_len]);
+        // trace!("packet: {:?}", &self.packet_recv_buf[..received_len]);
         self.last_chan_received = chan_num;
         match chan_num {
             CHANNEL_COMMAND => match report_id {
@@ -770,7 +769,7 @@ where
                 EXECUTABLE_DEVICE_RESP_RESET_COMPLETE => {
                     self.device_reset = true;
 
-                    log!("resp_reset {}", 1);
+                    trace!("resp_reset {}", 1);
                 }
                 _ => {
                     self.last_exec_chan_rid = report_id;
@@ -792,14 +791,14 @@ where
                             self.init_received = true;
                         }
 
-                        log!("CMD_RESP: 0x{:X}", cmd_resp);
+                        trace!("CMD_RESP: 0x{:X}", cmd_resp);
                     }
                     SHUB_PROD_ID_RESP => {
                         {
                             //let reset_cause = msg[4 + 1];
                             let _sw_vers_major = msg[4 + 2];
                             let _sw_vers_minor = msg[4 + 3];
-                            log!(
+                            trace!(
                                 "PID_RESP {}.{}",
                                 _sw_vers_major,
                                 _sw_vers_major
@@ -810,12 +809,12 @@ where
                     }
                     SHUB_GET_FEATURE_RESP => {
                         // 0xFC
-                        log!("feat resp: {}", msg[5]);
+                        trace!("feat resp: {}", msg[5]);
                         self.report_enabled[msg[5] as usize] = true;
                     }
                     SHUB_FRS_WRITE_RESP => {
                         //0xF5
-                        log!(
+                        trace!(
                             "write resp: {}",
                             self._frs_status_to_str(&msg[5])
                         );
@@ -839,7 +838,7 @@ where
                         // }
                     }
                     _ => {
-                        log!(
+                        trace!(
                             "unh hbc: 0x{:X} {:x?}",
                             report_id,
                             &msg[..PACKET_HEADER_LENGTH]
@@ -858,7 +857,7 @@ where
             _ => {
                 self.last_chan_received = chan_num;
 
-                log!("unh chan 0x{:X}", chan_num);
+                trace!("unh chan 0x{:X}", chan_num);
                 return Err(Box::new(format!("unknown chan 0x{:X}", chan_num)));
             }
         }
@@ -868,7 +867,7 @@ where
     /// The BNO080 starts up with all sensors disabled,
     /// waiting for the application to configure it.
     pub fn init(&mut self) -> Result<(), WrapperError<SE>> {
-        log!("wrapper init");
+        trace!("wrapper init");
 
         //Section 5.1.1.1 : On system startup, the SHTP control application will send
         // its full advertisement response, unsolicited, to the host.
@@ -888,13 +887,13 @@ where
             // we only expect two messages after reset:
             // eat the advertisement response
             delay_ms(250);
-            log!("Eating advertisement response");
+            trace!("Eating advertisement response");
             self.handle_one_message(20);
-            log!("Eating reset response");
+            trace!("Eating reset response");
             delay_ms(250);
             self.handle_one_message(20);
             // eat the unsolicited initialization response
-            // log!("Eating initialization response");
+            // trace!("Eating initialization response");
             // Further reads don't respond if we uncomment this
             // delay_ms(255);
             // self.handle_one_message(255);
@@ -978,7 +977,7 @@ where
         report_id: u8,
         millis_between_reports: u16,
     ) -> Result<bool, WrapperError<SE>> {
-        log!("enable_report 0x{:X}", report_id);
+        trace!("enable_report 0x{:X}", report_id);
 
         let micros_between_reports: u32 =
             (millis_between_reports as u32) * 1000;
@@ -1023,7 +1022,7 @@ where
             }
         }
         delay_ms(200);
-        log!(
+        trace!(
             "Report {:x} is enabled: {}",
             report_id,
             self.report_enabled[report_id as usize]
@@ -1074,10 +1073,10 @@ where
         }
 
         if self.frs_write_status != FRS_STATUS_WRITE_READY {
-            log!("FRS Write not ready");
+            trace!("FRS Write not ready");
             return Ok(false);
         }
-        log!("FRS Write ready");
+        trace!("FRS Write ready");
         delay_ms(150);
         let mut offset: u16 = 0;
         let q30_qi = f32_to_q(qi, 30);
@@ -1190,7 +1189,7 @@ where
         body_data: &[u8],
     ) -> Result<usize, WrapperError<SE>> {
         let packet_length = self.prep_send_packet(channel, body_data);
-        // log!("Sending {:?}", &self.packet_send_buf[..packet_length]);
+        // trace!("Sending {:?}", &self.packet_send_buf[..packet_length]);
 
         let rc = self
             .sensor_interface
@@ -1229,7 +1228,7 @@ where
 
     /// Verify that the sensor returns an expected chip ID
     fn verify_product_id(&mut self) -> Result<(), WrapperError<SE>> {
-        log!("request PID...");
+        trace!("request PID...");
         let cmd_body: [u8; 2] = [
             SHUB_PROD_ID_REQ, //request product ID
             0,                //reserved
@@ -1255,7 +1254,7 @@ where
 
         // process all incoming messages until we get a product id (or no more data)
         while !self.prod_id_verified {
-            log!("read PID");
+            trace!("read PID");
             let msg_count = self.handle_one_message(150);
             if msg_count < 1 {
                 break;
@@ -1340,7 +1339,7 @@ where
     /// as it is called during `init`.
     pub fn soft_reset(&mut self) -> Result<(), WrapperError<SE>> {
         //
-        log!("soft_reset");
+        trace!("soft_reset");
         let data: [u8; 1] = [EXECUTABLE_DEVICE_CMD_RESET];
         // send command packet and ignore received packets
         let received_len =

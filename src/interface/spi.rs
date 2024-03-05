@@ -1,11 +1,10 @@
-use log::error;
+use log::{error, trace};
 
 use super::SensorInterface;
 use crate::interface::delay::delay_ms;
 use crate::interface::gpio::{InputPin, OutputPin};
 use crate::interface::spidev::{Transfer, Write};
 use crate::interface::{SensorCommon, PACKET_HEADER_LENGTH};
-use crate::log;
 use crate::Error;
 use crate::Error::SensorUnresponsive;
 use std::fmt::Debug;
@@ -85,7 +84,7 @@ where
             delay_ms(1);
         }
 
-        log!("no hintn??");
+        trace!("no hintn??");
 
         false
     }
@@ -115,7 +114,7 @@ where
         // should already be high by default, but just in case...
         self.reset.set_high().map_err(Error::Pin)?;
 
-        log!("reset cycle... ");
+        trace!("reset cycle... ");
         // reset cycle
 
         self.reset.set_low().map_err(Error::Pin)?;
@@ -236,7 +235,7 @@ where
         if self.wait_for_sensor_awake(max_ms) {
             return self.read_packet(recv_buf);
         }
-        // log!("Sensor did not wake for read");
+        // trace!("Sensor did not wake for read");
         Ok(0)
     }
 }
