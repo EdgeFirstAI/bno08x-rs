@@ -13,9 +13,11 @@ use crate::interface::spidev::SpiDevice;
 use crate::interface::{SensorInterface, SpiInterface, PACKET_HEADER_LENGTH};
 use crate::log;
 use crate::wrapper::io::Error;
+use log::{trace, warn};
 
 use core::ops::Shr;
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::io::{self, ErrorKind};
 use std::ops::Shl;
 use std::time::{Instant, SystemTime};
@@ -302,7 +304,12 @@ where
             let received_len = res.unwrap_or(0);
             if received_len > 0 {
                 msg_count += 1;
-                self.handle_received_packet(received_len);
+                match self.handle_received_packet(received_len) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        warn!("{:?}", e)
+                    }
+                };
             }
         } else {
             log!("handle1 err {:?}", res);
@@ -662,25 +669,76 @@ where
         for cursor in 1..payload_len {
             let err: u8 = payload[cursor];
             self.last_error_received = err;
-
-            eprintln!("Error message from bno08x: {:x}", err);
+            match err {
+                0 => {
+                    // no error
+                }
+                1 => {
+                    warn!("Hub application attempted to exceed maximum read cargo length: Error code {}", err);
+                }
+                2 => {
+                    warn!("Host write was too short (need at least a 4-byte header): Error code {}", err);
+                }
+                3 => {
+                    warn!("Host wrote a header with length greater than maximum write cargo length: Error code {}", err);
+                }
+                4 => {
+                    warn!("Host wrote a header with length less than or equal to header length (either invalid or no payload). Note that a length of 0 is permitted, indicating \"no cargo.\": Error code {}", err);
+                }
+                5 => {
+                    warn!("Host wrote beginning of fragmented cargo (transfer length was less than full cargo length), fragmentation not supported: Error code {}", err);
+                }
+                6 => {
+                    warn!("Host wrote continuation of fragmented cargo (continuation bit sent), fragmentation not supported: Error code {}", err);
+                }
+                7 => {
+                    warn!("Unrecognized command on control channel: Error code {}", err);
+                }
+                8 => {
+                    warn!("Unrecognized parameter to get-advertisement command: Error code {}", err);
+                }
+                9 => {
+                    warn!(
+                        "Host wrote to unrecognized channe: Error code {}",
+                        err
+                    );
+                }
+                10 => {
+                    warn!("Advertisement request received while Advertisement Response was pending: Error code {}", err);
+                }
+                11 => {
+                    warn!("Host performed a write operation before the hub had finished sending its advertisement response: Error code {}", err);
+                }
+                12 => {
+                    warn!(
+                        "Error list too long to send, truncated: Error code {}",
+                        err
+                    );
+                }
+                _ => {
+                    trace!("Unknown error code {}", err);
+                }
+            }
         }
+        return;
     }
 
-    pub fn handle_received_packet(&mut self, received_len: usize) {
+    pub fn handle_received_packet(
+        &mut self,
+        received_len: usize,
+    ) -> Result<(), Box<dyn Debug>> {
         let mut _rec_len = received_len;
         if _rec_len > PACKET_RECV_BUF_LEN {
-            eprintln!(
+            warn!(
                 "Packet length of {} exceeded the buffer length of {}",
                 received_len, PACKET_RECV_BUF_LEN
             );
             _rec_len = PACKET_RECV_BUF_LEN;
         } else if _rec_len < PACKET_HEADER_LENGTH {
-            eprintln!(
+            return Err(Box::new(format!(
                 "Packet length of {} was ignored. Shorter than header length of {}",
                 received_len, PACKET_HEADER_LENGTH
-            );
-            return;
+            )));
         }
         let msg = &self.packet_recv_buf[.._rec_len];
         let chan_num = msg[2];
@@ -702,8 +760,10 @@ where
                 }
                 _ => {
                     self.last_command_chan_rid = report_id;
-
-                    log!("unh cmd: {}", report_id);
+                    return Err(Box::new(format!(
+                        "unknown cmd: {}",
+                        report_id
+                    )));
                 }
             },
             CHANNEL_EXECUTABLE => match report_id {
@@ -715,7 +775,10 @@ where
                 _ => {
                     self.last_exec_chan_rid = report_id;
 
-                    log!("unh exe: {:x}", report_id);
+                    return Err(Box::new(format!(
+                        "unknown exe: {}",
+                        report_id
+                    )));
                 }
             },
             CHANNEL_HUB_CONTROL => {
@@ -781,6 +844,11 @@ where
                             report_id,
                             &msg[..PACKET_HEADER_LENGTH]
                         );
+                        return Err(Box::new(format!(
+                            "unknown hbc: 0x{:X} {:x?}",
+                            report_id,
+                            &msg[..PACKET_HEADER_LENGTH]
+                        )));
                     }
                 }
             }
@@ -791,8 +859,10 @@ where
                 self.last_chan_received = chan_num;
 
                 log!("unh chan 0x{:X}", chan_num);
+                return Err(Box::new(format!("unknown chan 0x{:X}", chan_num)));
             }
         }
+        return Ok(());
     }
 
     /// The BNO080 starts up with all sensors disabled,
@@ -943,7 +1013,12 @@ where
             if rc.is_ok() {
                 let received_len = rc.unwrap();
                 if received_len > 0 {
-                    self.handle_received_packet(received_len);
+                    match self.handle_received_packet(received_len) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            warn!("{:?}", e)
+                        }
+                    };
                 }
             }
         }
@@ -954,7 +1029,7 @@ where
             self.report_enabled[report_id as usize]
         );
         if !self.report_enabled[report_id as usize] {
-            // eprintln!("Could not enable report id: {}", report_id);
+            // warn!("Could not enable report id: {}", report_id);
             return Ok(false);
         }
         Ok(true)
@@ -988,7 +1063,12 @@ where
             if rc.is_ok() {
                 let received_len = rc.unwrap();
                 if received_len > 0 {
-                    self.handle_received_packet(received_len);
+                    match self.handle_received_packet(received_len) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            warn!("{:?}", e)
+                        }
+                    };
                 }
             }
         }
@@ -1029,7 +1109,12 @@ where
             if rc.is_ok() {
                 let received_len = rc.unwrap();
                 if received_len > 0 {
-                    self.handle_received_packet(received_len);
+                    match self.handle_received_packet(received_len) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            warn!("{:?}", e)
+                        }
+                    };
                 }
             }
         }
@@ -1060,7 +1145,12 @@ where
             if rc.is_ok() {
                 let received_len = rc.unwrap();
                 if received_len > 0 {
-                    self.handle_received_packet(received_len);
+                    match self.handle_received_packet(received_len) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            warn!("{:?}", e)
+                        }
+                    };
                 }
             }
         }
@@ -1110,7 +1200,12 @@ where
             )
             .map_err(WrapperError::CommError)?;
         if rc > 0 {
-            self.handle_received_packet(rc);
+            match self.handle_received_packet(rc) {
+                Ok(_) => {}
+                Err(e) => {
+                    warn!("{:?}", e)
+                }
+            };
         }
         Ok(packet_length)
     }
@@ -1149,7 +1244,12 @@ where
                 cmd_body.as_ref(),
             )?;
             if response_size > 0 {
-                self.handle_received_packet(response_size);
+                match self.handle_received_packet(response_size) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        warn!("{:?}", e)
+                    }
+                };
             }
         };
 
@@ -1246,7 +1346,12 @@ where
         let received_len =
             self.send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
         if received_len > 0 {
-            self.handle_received_packet(received_len);
+            match self.handle_received_packet(received_len) {
+                Ok(_) => {}
+                Err(e) => {
+                    warn!("{:?}", e)
+                }
+            };
         }
 
         Ok(())

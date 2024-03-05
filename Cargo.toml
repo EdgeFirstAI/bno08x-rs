@@ -21,6 +21,7 @@ path = "src/lib.rs"
 [dependencies]
 spidev = "0.5.1"
 gpiod = "0.2.3"
+log = "0.4.21"
 
 [features]
 default = []

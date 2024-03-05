@@ -1,12 +1,14 @@
+use log::error;
+
 use super::SensorInterface;
 use crate::interface::delay::delay_ms;
 use crate::interface::gpio::{InputPin, OutputPin};
 use crate::interface::spidev::{Transfer, Write};
 use crate::interface::{SensorCommon, PACKET_HEADER_LENGTH};
+use crate::log;
 use crate::Error;
 use crate::Error::SensorUnresponsive;
-
-use crate::log;
+use std::fmt::Debug;
 
 /// Encapsulates all the lines required to operate this sensor
 /// - SCK: clock line from master
@@ -96,8 +98,8 @@ where
     // CSN: OutputPin<Error = PinE>,
     IN: InputPin<Error = PinE>,
     RS: OutputPin<Error = PinE>,
-    CommE: core::fmt::Debug,
-    PinE: core::fmt::Debug,
+    CommE: Debug,
+    PinE: Debug,
 {
     type SensorError = Error<CommE, PinE>;
 
@@ -123,7 +125,6 @@ where
         // wait for sensor to set hintn pin after reset
         let ready = self.wait_for_sensor_awake(200);
         if !ready {
-            eprintln!("Setup: sensor not ready");
             return Err(SensorUnresponsive);
         }
 
@@ -155,8 +156,11 @@ where
         }
         let total_packet_len = std::cmp::max(read_packet_len, send_buf.len());
         if total_packet_len > recv_buf.len() {
-            // TODO: throw Err()
-            eprintln!("Total packet length greater than recv buffer size");
+            // TODO: Figure out how to instantiate an Communication Error
+            // return Err(Error::Comm(String::from(
+            //     "Total packet length greater than recv buffer size",
+            // )));
+            error!("Total packet length greater than recv buffer size");
         }
         delay_ms(5);
         let rc = self.spi.transfer(&mut recv_buf[..total_packet_len]);
@@ -187,8 +191,9 @@ where
         recv_buf: &mut [u8],
     ) -> Result<usize, Self::SensorError> {
         if !self.block_on_hintn(1000) {
-            eprintln!("No message to read");
-            // return Err(SensorUnresponsive);
+            // TODO: Figure out how to instantiate an Communication Error
+            // return Err(Error::Comm(String::from("No message to read").into()));
+            error!("No message to read");
         }
         // As soon as host selects CSN, HINTN resets
 
