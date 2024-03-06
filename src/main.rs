@@ -23,7 +23,7 @@ fn quaternion_to_euler(qr: f32, qi: f32, qj: f32, qk: f32) -> [f32; 3] {
         .atan2(1.0 - 2.0 * (qi * qi + qj * qj))
         * RAD_TO_DEG;
 
-    return [yaw, pitch, roll];
+    [yaw, pitch, roll]
 }
 
 fn print_info(imu_driver: &BNO08x<SpiInterface<SpiDevice, GpiodIn, GpiodOut>>) {
