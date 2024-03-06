@@ -144,7 +144,7 @@ where
         // check how long the message to read is
         let mut read_packet_len = 0;
         let rc = self.spi.transfer(&mut tmp[..]);
-        if !rc.is_err() {
+        if rc.is_ok() {
             read_packet_len =
                 SensorCommon::parse_packet_header(&tmp[..PACKET_HEADER_LENGTH]);
         }
@@ -160,7 +160,7 @@ where
         }
         delay_ms(5);
         let rc = self.spi.transfer(&mut recv_buf[..total_packet_len]);
-        if !rc.is_err() {
+        if rc.is_ok() {
             read_packet_len = SensorCommon::parse_packet_header(
                 &recv_buf[..PACKET_HEADER_LENGTH],
             );
@@ -173,7 +173,7 @@ where
     }
 
     fn write_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError> {
-        let rc = self.spi.write(&packet).map_err(Error::Comm);
+        let rc = self.spi.write(packet).map_err(Error::Comm);
         if rc.is_err() {
             return Err(rc.unwrap_err());
         }
@@ -198,7 +198,7 @@ where
             *i = 0;
         }
         let rc = self.spi.transfer(&mut recv_buf[..PACKET_HEADER_LENGTH]);
-        if !rc.is_err() {
+        if rc.is_ok() {
             read_packet_len = SensorCommon::parse_packet_header(
                 &recv_buf[..PACKET_HEADER_LENGTH],
             );
@@ -210,7 +210,7 @@ where
         }
         delay_ms(5);
         let rc = self.spi.transfer(&mut recv_buf[..read_packet_len]);
-        if !rc.is_err() {
+        if rc.is_ok() {
             read_packet_len = SensorCommon::parse_packet_header(
                 &recv_buf[..PACKET_HEADER_LENGTH],
             );

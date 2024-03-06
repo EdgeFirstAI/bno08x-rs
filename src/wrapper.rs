@@ -103,7 +103,7 @@ pub struct BNO08x<'a, SI> {
 
     /// Sensor update callbacks
     report_update_callbacks:
-        [HashMap<String, Box<dyn Fn(&Self) -> () + 'a>>; 16],
+        [HashMap<String, Box<dyn Fn(&Self) + 'a>>; 16],
 }
 
 impl<'a, SI> BNO08x<'a, SI> {
@@ -173,8 +173,8 @@ impl<'a> BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>> {
         let ctrl_lines: SpiControlLines<SpiDevice, GpiodIn, GpiodOut> =
             SpiControlLines::<SpiDevice, GpiodIn, GpiodOut> {
                 spi: _spidev,
-                hintn: hintn,
-                reset: reset,
+                hintn,
+                reset,
             };
 
         let spi_int: SpiInterface<SpiDevice, GpiodIn, GpiodOut> =
@@ -316,12 +316,12 @@ where
     /// if there was no packet to read.
     pub fn eat_one_message(&mut self) -> usize {
         let res = self.receive_packet_with_timeout(150);
-        return if let Ok(received_len) = res {
+        if let Ok(received_len) = res {
             received_len
         } else {
             log!("e1 err {:?}", res);
             0
-        };
+        }
     }
 
     fn handle_advertise_response(&mut self, received_len: usize) {
@@ -875,13 +875,13 @@ where
         if report_id as usize <= self.report_enabled.len() {
             return self.report_update_time[report_id as usize];
         }
-        return 0;
+        0
     }
     pub fn is_report_enabled(&self, report_id: u8) -> bool {
         if report_id as usize <= self.report_enabled.len() {
             return self.report_enabled[report_id as usize];
         }
-        return false;
+        false
     }
 
     pub fn add_sensor_report_callback(
@@ -1263,7 +1263,7 @@ where
         let recv_packet_length = self
             .sensor_interface
             .send_and_receive_packet(
-                &self.packet_send_buf[..send_packet_length].as_ref(),
+                self.packet_send_buf[..send_packet_length].as_ref(),
                 &mut self.packet_recv_buf,
             )
             .map_err(WrapperError::CommError)?;

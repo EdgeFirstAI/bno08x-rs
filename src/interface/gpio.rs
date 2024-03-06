@@ -115,12 +115,12 @@ impl InputPin for GpiodIn {
     /// Is the input pin high?
     fn is_high(&self) -> Result<bool, Self::Error> {
         let values = self.input.get_values([false])?;
-        Ok(values[0] == true)
+        Ok(values[0])
     }
 
     /// Is the input pin low?
     fn is_low(&self) -> Result<bool, Self::Error> {
         let values = self.input.get_values([false])?;
-        Ok(values[0] == false)
+        Ok(!values[0])
     }
 }
