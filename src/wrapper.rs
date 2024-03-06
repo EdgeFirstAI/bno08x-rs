@@ -103,8 +103,7 @@ pub struct BNO08x<'a, SI> {
     report_update_time: [u128; 16],
 
     /// Sensor update callbacks
-    report_update_callbacks:
-        [HashMap<String, Box<dyn Fn(&Self) + 'a>>; 16],
+    report_update_callbacks: [HashMap<String, Box<dyn Fn(&Self) + 'a>>; 16],
 }
 
 impl<'a, SI> BNO08x<'a, SI> {
