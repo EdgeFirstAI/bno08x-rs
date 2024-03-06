@@ -1487,10 +1487,7 @@ const SH2_STARTUP_INIT_UNSOLICITED: u8 =
 
 #[cfg(test)]
 mod tests {
-    // use super::*;
-    use crate::interface::delay::TimerMs;
     use crate::wrapper::f32_to_q;
-    use crate::wrapper::BNO08x;
 
     #[test]
     fn test_f32_to_q() {
