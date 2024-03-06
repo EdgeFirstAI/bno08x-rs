@@ -718,7 +718,6 @@ where
                 }
             }
         }
-        return;
     }
 
     pub fn handle_received_packet(
@@ -860,7 +859,7 @@ where
                 return Err(Box::new(format!("unknown chan 0x{:X}", chan_num)));
             }
         }
-        return Ok(());
+        Ok(())
     }
 
     /// The BNO080 starts up with all sensors disabled,
