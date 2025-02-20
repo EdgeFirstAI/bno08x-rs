@@ -1,12 +1,16 @@
 use log::{error, trace};
 
 use super::SensorInterface;
-use crate::interface::delay::delay_ms;
-use crate::interface::gpio::{InputPin, OutputPin};
-use crate::interface::spidev::{Transfer, Write};
-use crate::interface::{SensorCommon, PACKET_HEADER_LENGTH};
-use crate::Error;
-use crate::Error::SensorUnresponsive;
+use crate::{
+    interface::{
+        delay::delay_ms,
+        gpio::{InputPin, OutputPin},
+        spidev::{Transfer, Write},
+        SensorCommon, PACKET_HEADER_LENGTH,
+    },
+    Error,
+    Error::SensorUnresponsive,
+};
 use std::fmt::Debug;
 
 /// Encapsulates all the lines required to operate this sensor
@@ -14,7 +18,8 @@ use std::fmt::Debug;
 /// - MISO: Data input from the sensor to the master
 /// - MOSI: Output from the master to the sensor
 /// - CSN: chip select line that selects the device on the shared SPI bus
-/// - HINTN: Hardware Interrupt. Sensor uses this to indicate it had data available for read
+/// - HINTN: Hardware Interrupt. Sensor uses this to indicate it had data
+///   available for read
 /// - RSTN: Reset the device
 pub struct SpiControlLines<SPI, /* CSN, */ IN, RSTN> {
     pub spi: SPI, // the spidev read/write
@@ -24,7 +29,6 @@ pub struct SpiControlLines<SPI, /* CSN, */ IN, RSTN> {
 }
 
 /// This combines the SPI peripheral and associated control pins
-///
 pub struct SpiInterface<SPI, /* CSN, */ IN, RSTN> {
     spi: SPI,
     // csn: CSN,
@@ -33,8 +37,7 @@ pub struct SpiInterface<SPI, /* CSN, */ IN, RSTN> {
     received_packet_count: usize,
 }
 
-impl<SPI, /* CSN,  */ IN, RSTN, CommE, PinE>
-    SpiInterface<SPI, /* CSN,  */ IN, RSTN>
+impl<SPI, /* CSN, */ IN, RSTN, CommE, PinE> SpiInterface<SPI, /* CSN, */ IN, RSTN>
 where
     SPI: Write<Error = CommE> + Transfer<Error = CommE>,
     // CSN: OutputPin<Error = PinE>,
@@ -145,8 +148,7 @@ where
         let mut read_packet_len = 0;
         let rc = self.spi.transfer(&mut tmp[..]);
         if rc.is_ok() {
-            read_packet_len =
-                SensorCommon::parse_packet_header(&tmp[..PACKET_HEADER_LENGTH]);
+            read_packet_len = SensorCommon::parse_packet_header(&tmp[..PACKET_HEADER_LENGTH]);
         }
 
         // Copy the write message into the buffer
@@ -164,9 +166,7 @@ where
         delay_ms(5);
         let rc = self.spi.transfer(&mut recv_buf[..total_packet_len]);
         if rc.is_ok() {
-            read_packet_len = SensorCommon::parse_packet_header(
-                &recv_buf[..PACKET_HEADER_LENGTH],
-            );
+            read_packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
         }
 
         if read_packet_len > 0 {
@@ -185,10 +185,7 @@ where
     }
 
     /// Read a complete packet from the sensor
-    fn read_packet(
-        &mut self,
-        recv_buf: &mut [u8],
-    ) -> Result<usize, Self::SensorError> {
+    fn read_packet(&mut self, recv_buf: &mut [u8]) -> Result<usize, Self::SensorError> {
         if !self.block_on_hintn(1000) {
             // TODO: Figure out how to instantiate an Communication Error
             // return Err(Error::Comm(String::from("No message to read").into()));
@@ -203,9 +200,7 @@ where
         }
         let rc = self.spi.transfer(&mut recv_buf[..PACKET_HEADER_LENGTH]);
         if rc.is_ok() {
-            read_packet_len = SensorCommon::parse_packet_header(
-                &recv_buf[..PACKET_HEADER_LENGTH],
-            );
+            read_packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
         }
 
         //zero the receive buffer
@@ -215,9 +210,7 @@ where
         delay_ms(5);
         let rc = self.spi.transfer(&mut recv_buf[..read_packet_len]);
         if rc.is_ok() {
-            read_packet_len = SensorCommon::parse_packet_header(
-                &recv_buf[..PACKET_HEADER_LENGTH],
-            );
+            read_packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
         }
 
         if read_packet_len > 0 {

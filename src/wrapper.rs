@@ -6,20 +6,26 @@ LICENSE: BSD3 (see LICENSE file)
 /*
 Modified 2023 Au-Zone Technologies
 */
-use crate::interface::delay::delay_ms;
-use crate::interface::gpio::{GpiodIn, GpiodOut};
-use crate::interface::spi::SpiControlLines;
-use crate::interface::spidev::SpiDevice;
-use crate::interface::{SensorInterface, SpiInterface, PACKET_HEADER_LENGTH};
-use crate::wrapper::io::Error;
+use crate::{
+    interface::{
+        delay::delay_ms,
+        gpio::{GpiodIn, GpiodOut},
+        spi::SpiControlLines,
+        spidev::SpiDevice,
+        SensorInterface, SpiInterface, PACKET_HEADER_LENGTH,
+    },
+    wrapper::io::Error,
+};
 use log::{debug, trace, warn};
 
 use core::ops::Shr;
-use std::collections::HashMap;
-use std::fmt::Debug;
-use std::io::{self, ErrorKind};
-use std::ops::Shl;
-use std::time::{Instant, SystemTime};
+use std::{
+    collections::HashMap,
+    fmt::Debug,
+    io::{self, ErrorKind},
+    ops::Shl,
+    time::{Instant, SystemTime},
+};
 
 const PACKET_SEND_BUF_LEN: usize = 256;
 const PACKET_RECV_BUF_LEN: usize = 2048;
@@ -106,7 +112,7 @@ pub struct BNO08x<'a, SI> {
     report_update_callbacks: [HashMap<String, Box<dyn Fn(&Self) + 'a>>; 16],
 }
 
-impl<'a, SI> BNO08x<'a, SI> {
+impl<SI> BNO08x<'_, SI> {
     pub fn new_with_interface(sensor_interface: SI) -> Self {
         Self {
             sensor_interface,
@@ -154,8 +160,7 @@ impl<'a> BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>> {
         hintn_pin: u32,
         reset_gpiochip: &str,
         reset_pin: u32,
-    ) -> io::Result<BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>>>
-    {
+    ) -> io::Result<BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>>> {
         let hintn: GpiodIn;
         let reset: GpiodOut;
         if hintn_gpiochip == reset_gpiochip {
@@ -177,8 +182,7 @@ impl<'a> BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>> {
                 reset,
             };
 
-        let spi_int: SpiInterface<SpiDevice, GpiodIn, GpiodOut> =
-            SpiInterface::new(ctrl_lines);
+        let spi_int: SpiInterface<SpiDevice, GpiodIn, GpiodOut> = SpiInterface::new(ctrl_lines);
         let imu_driver: BNO08x<SpiInterface<SpiDevice, GpiodIn, GpiodOut>> =
             BNO08x::new_with_interface(spi_int);
 
@@ -189,8 +193,7 @@ impl<'a> BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>> {
         spidevice: &str,
         hintn_pin: &str,
         reset_pin: &str,
-    ) -> io::Result<BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>>>
-    {
+    ) -> io::Result<BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>>> {
         let gpio_chips = gpiod::Chip::list_devices()?;
         let mut hintn_gpio_chip = String::from("");
         let mut hintn_num = 0;
@@ -205,8 +208,7 @@ impl<'a> BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>> {
                     hintn_gpio_chip = entry.display().to_string();
                     hintn_num = i;
                     hintn_found = true;
-                } else if !reset_found && _chip.line_info(i)?.name == reset_pin
-                {
+                } else if !reset_found && _chip.line_info(i)?.name == reset_pin {
                     reset_gpio_chip = entry.display().to_string();
                     reset_num = i;
                     reset_found = true;
@@ -256,11 +258,7 @@ where
         }
     }
 
-    pub fn handle_messages(
-        &mut self,
-        timeout_ms: usize,
-        max_count: u32,
-    ) -> u32 {
+    pub fn handle_messages(&mut self, timeout_ms: usize, max_count: u32) -> u32 {
         let mut total_handled: u32 = 0;
         let mut i: u32 = 0;
         while i < max_count {
@@ -384,18 +382,15 @@ where
         let data1: i16 = Self::read_i16_at_cursor(msg, &mut cursor);
         let data2: i16 = Self::read_i16_at_cursor(msg, &mut cursor);
         let data3: i16 = Self::read_i16_at_cursor(msg, &mut cursor);
-        let data4: i16 =
-            Self::try_read_i16_at_cursor(msg, &mut cursor).unwrap_or(0);
-        let data5: i16 =
-            Self::try_read_i16_at_cursor(msg, &mut cursor).unwrap_or(0);
+        let data4: i16 = Self::try_read_i16_at_cursor(msg, &mut cursor).unwrap_or(0);
+        let data5: i16 = Self::try_read_i16_at_cursor(msg, &mut cursor).unwrap_or(0);
 
         (cursor, feature_report_id, data1, data2, data3, data4, data5)
     }
 
     fn handle_sensor_report_update(&mut self, report_id: u8, timestamp: u128) {
         self.report_update_time[report_id as usize] = timestamp;
-        for (_, val) in self.report_update_callbacks[report_id as usize].iter()
-        {
+        for (_, val) in self.report_update_callbacks[report_id as usize].iter() {
             val(self);
         }
     }
@@ -430,10 +425,7 @@ where
         while outer_cursor < payload_len {
             //let start_cursor = outer_cursor;
             let (inner_cursor, report_id, data1, data2, data3, data4, data5) =
-                Self::handle_one_input_report(
-                    outer_cursor,
-                    &self.packet_recv_buf[..received_len],
-                );
+                Self::handle_one_input_report(outer_cursor, &self.packet_recv_buf[..received_len]);
             outer_cursor = inner_cursor;
             // report_count += 1;
             let timestamp: u128;
@@ -447,21 +439,15 @@ where
                     self.handle_sensor_report_update(report_id, timestamp)
                 }
                 SENSOR_REPORTID_ROTATION_VECTOR => {
-                    self.update_rotation_quaternion(
-                        data1, data2, data3, data4, data5,
-                    );
+                    self.update_rotation_quaternion(data1, data2, data3, data4, data5);
                     self.handle_sensor_report_update(report_id, timestamp)
                 }
                 SENSOR_REPORTID_ROTATION_VECTOR_GAME => {
-                    self.update_rotation_quaternion_game(
-                        data1, data2, data3, data4,
-                    );
+                    self.update_rotation_quaternion_game(data1, data2, data3, data4);
                     self.handle_sensor_report_update(report_id, timestamp)
                 }
                 SENSOR_REPORTID_ROTATION_VECTOR_GEOMAGNETIC => {
-                    self.update_rotation_quaternion_geomag(
-                        data1, data2, data3, data4, data5,
-                    );
+                    self.update_rotation_quaternion_geomag(data1, data2, data3, data4, data5);
                     self.handle_sensor_report_update(report_id, timestamp)
                 }
                 SENSOR_REPORTID_LINEAR_ACCEL => {
@@ -487,7 +473,8 @@ where
 
                 _ => {
                     // trace!("uhr: {:X}", report_id);
-                    // trace!("uhr: 0x{:X} {:?}  ", report_id, &self.packet_recv_buf[start_cursor..start_cursor+5]);
+                    // trace!("uhr: 0x{:X} {:?}  ", report_id,
+                    // &self.packet_recv_buf[start_cursor..start_cursor+5]);
                 }
             }
         }
@@ -503,14 +490,7 @@ where
 
     /// Given a set of quaternion values in the Q-fixed-point format,
     /// calculate and update the corresponding float values
-    fn update_rotation_quaternion(
-        &mut self,
-        q_i: i16,
-        q_j: i16,
-        q_k: i16,
-        q_r: i16,
-        q_a: i16,
-    ) {
+    fn update_rotation_quaternion(&mut self, q_i: i16, q_j: i16, q_k: i16, q_r: i16, q_a: i16) {
         //trace!("rquat {} {} {} {} {}", q_i, q_j, q_k, q_r, q_a);
         self.rotation_quaternion = [
             q_to_f32(q_i, Q_POINTS[SENSOR_REPORTID_ROTATION_VECTOR as usize]),
@@ -518,8 +498,7 @@ where
             q_to_f32(q_k, Q_POINTS[SENSOR_REPORTID_ROTATION_VECTOR as usize]),
             q_to_f32(q_r, Q_POINTS[SENSOR_REPORTID_ROTATION_VECTOR as usize]),
         ];
-        self.rotation_acc =
-            q_to_f32(q_a, Q_POINTS2[SENSOR_REPORTID_ROTATION_VECTOR as usize]);
+        self.rotation_acc = q_to_f32(q_a, Q_POINTS2[SENSOR_REPORTID_ROTATION_VECTOR as usize]);
     }
 
     /// Given a set of quaternion values in the Q-fixed-point format,
@@ -559,31 +538,13 @@ where
 
     /// Given a set of quaternion values in the Q-fixed-point format,
     /// calculate and update the corresponding float values
-    fn update_rotation_quaternion_game(
-        &mut self,
-        q_i: i16,
-        q_j: i16,
-        q_k: i16,
-        q_r: i16,
-    ) {
+    fn update_rotation_quaternion_game(&mut self, q_i: i16, q_j: i16, q_k: i16, q_r: i16) {
         //trace!("rquat {} {} {} {} {}", q_i, q_j, q_k, q_r, q_a);
         self.game_rotation_quaternion = [
-            q_to_f32(
-                q_i,
-                Q_POINTS[SENSOR_REPORTID_ROTATION_VECTOR_GAME as usize],
-            ),
-            q_to_f32(
-                q_j,
-                Q_POINTS[SENSOR_REPORTID_ROTATION_VECTOR_GAME as usize],
-            ),
-            q_to_f32(
-                q_k,
-                Q_POINTS[SENSOR_REPORTID_ROTATION_VECTOR_GAME as usize],
-            ),
-            q_to_f32(
-                q_r,
-                Q_POINTS[SENSOR_REPORTID_ROTATION_VECTOR_GAME as usize],
-            ),
+            q_to_f32(q_i, Q_POINTS[SENSOR_REPORTID_ROTATION_VECTOR_GAME as usize]),
+            q_to_f32(q_j, Q_POINTS[SENSOR_REPORTID_ROTATION_VECTOR_GAME as usize]),
+            q_to_f32(q_k, Q_POINTS[SENSOR_REPORTID_ROTATION_VECTOR_GAME as usize]),
+            q_to_f32(q_r, Q_POINTS[SENSOR_REPORTID_ROTATION_VECTOR_GAME as usize]),
         ];
     }
 
@@ -620,12 +581,9 @@ where
     /// Given a set of linear acceleration values in the Q-fixed-point format,
     /// calculate and update the corresponding float values
     fn update_gyro_uncalib(&mut self, x: i16, y: i16, z: i16) {
-        let x =
-            q_to_f32(x, Q_POINTS[SENSOR_REPORTID_GYROSCOPE_UNCALIB as usize]);
-        let y =
-            q_to_f32(y, Q_POINTS[SENSOR_REPORTID_GYROSCOPE_UNCALIB as usize]);
-        let z =
-            q_to_f32(z, Q_POINTS[SENSOR_REPORTID_GYROSCOPE_UNCALIB as usize]);
+        let x = q_to_f32(x, Q_POINTS[SENSOR_REPORTID_GYROSCOPE_UNCALIB as usize]);
+        let y = q_to_f32(y, Q_POINTS[SENSOR_REPORTID_GYROSCOPE_UNCALIB as usize]);
+        let z = q_to_f32(z, Q_POINTS[SENSOR_REPORTID_GYROSCOPE_UNCALIB as usize]);
 
         self.uncalib_gryo = [x, y, z];
     }
@@ -639,25 +597,31 @@ where
 
         self.mag_field = [x, y, z];
     }
+
     fn _frs_status_to_str(&self, status: &u8) -> &'static str {
         let s: u8 = *status;
         match s {
-            FRS_STATUS_WORD_RECIEVED => {"word(s) received"},
-            FRS_STATUS_UNRECOGNIZED_FRS_TYPE => {"unrecognized FRS type"},
-            FRS_STATUS_BUSY => {"busy"},
-            FRS_STATUS_WRITE_COMPLETE => {"write completed"},
-            FRS_STATUS_WRITE_READY => {"write mode entered or ready"},
-            FRS_STATUS_WRITE_FAILED => {"write failed"},
-            FRS_STATUS_DATA_RECV_NOT_IN_WRITE_MODE => {"data received while not in write mode"},
-            FRS_STATUS_INVALID_LENGTH => {"invalid length"},
-            FRS_STATUS_RECORD_VALID => {"record valid (the complete record passed internal validation checks)"},
-            FRS_STATUS_RECORD_INVALID => {"record invalid (the complete record failed internal validation checks)"},
-            FRS_STATUS_DEVICE_ERROR => {"device error (DFU flash memory device unavailable)"},
-            FRS_STATUS_READONLY => {"record is read only"},
-            FRS_STATUS_NO_DATA => {"no FRS status recieved"},
-            _ => {"reserved"},
+            FRS_STATUS_WORD_RECIEVED => "word(s) received",
+            FRS_STATUS_UNRECOGNIZED_FRS_TYPE => "unrecognized FRS type",
+            FRS_STATUS_BUSY => "busy",
+            FRS_STATUS_WRITE_COMPLETE => "write completed",
+            FRS_STATUS_WRITE_READY => "write mode entered or ready",
+            FRS_STATUS_WRITE_FAILED => "write failed",
+            FRS_STATUS_DATA_RECV_NOT_IN_WRITE_MODE => "data received while not in write mode",
+            FRS_STATUS_INVALID_LENGTH => "invalid length",
+            FRS_STATUS_RECORD_VALID => {
+                "record valid (the complete record passed internal validation checks)"
+            }
+            FRS_STATUS_RECORD_INVALID => {
+                "record invalid (the complete record failed internal validation checks)"
+            }
+            FRS_STATUS_DEVICE_ERROR => "device error (DFU flash memory device unavailable)",
+            FRS_STATUS_READONLY => "record is read only",
+            FRS_STATUS_NO_DATA => "no FRS status recieved",
+            _ => "reserved",
         }
     }
+
     /// Handle one or more errors sent in response to a command
     fn handle_cmd_resp_error_list(&mut self, received_len: usize) {
         let payload_len = received_len - PACKET_HEADER_LENGTH;
@@ -675,7 +639,10 @@ where
                     warn!("Hub application attempted to exceed maximum read cargo length: Error code {}", err);
                 }
                 2 => {
-                    warn!("Host write was too short (need at least a 4-byte header): Error code {}", err);
+                    warn!(
+                        "Host write was too short (need at least a 4-byte header): Error code {}",
+                        err
+                    );
                 }
                 3 => {
                     warn!("Host wrote a header with length greater than maximum write cargo length: Error code {}", err);
@@ -690,16 +657,19 @@ where
                     warn!("Host wrote continuation of fragmented cargo (continuation bit sent), fragmentation not supported: Error code {}", err);
                 }
                 7 => {
-                    warn!("Unrecognized command on control channel: Error code {}", err);
-                }
-                8 => {
-                    warn!("Unrecognized parameter to get-advertisement command: Error code {}", err);
-                }
-                9 => {
                     warn!(
-                        "Host wrote to unrecognized channe: Error code {}",
+                        "Unrecognized command on control channel: Error code {}",
                         err
                     );
+                }
+                8 => {
+                    warn!(
+                        "Unrecognized parameter to get-advertisement command: Error code {}",
+                        err
+                    );
+                }
+                9 => {
+                    warn!("Host wrote to unrecognized channe: Error code {}", err);
                 }
                 10 => {
                     warn!("Advertisement request received while Advertisement Response was pending: Error code {}", err);
@@ -708,10 +678,7 @@ where
                     warn!("Host performed a write operation before the hub had finished sending its advertisement response: Error code {}", err);
                 }
                 12 => {
-                    warn!(
-                        "Error list too long to send, truncated: Error code {}",
-                        err
-                    );
+                    warn!("Error list too long to send, truncated: Error code {}", err);
                 }
                 _ => {
                     debug!("Unknown error code {}", err);
@@ -720,10 +687,7 @@ where
         }
     }
 
-    pub fn handle_received_packet(
-        &mut self,
-        received_len: usize,
-    ) -> Result<(), Box<dyn Debug>> {
+    pub fn handle_received_packet(&mut self, received_len: usize) -> Result<(), Box<dyn Debug>> {
         let mut _rec_len = received_len;
         if _rec_len > PACKET_RECV_BUF_LEN {
             warn!(
@@ -757,10 +721,7 @@ where
                 }
                 _ => {
                     self.last_command_chan_rid = report_id;
-                    return Err(Box::new(format!(
-                        "unknown cmd: {}",
-                        report_id
-                    )));
+                    return Err(Box::new(format!("unknown cmd: {}", report_id)));
                 }
             },
             CHANNEL_EXECUTABLE => match report_id {
@@ -772,10 +733,7 @@ where
                 _ => {
                     self.last_exec_chan_rid = report_id;
 
-                    return Err(Box::new(format!(
-                        "unknown exe: {}",
-                        report_id
-                    )));
+                    return Err(Box::new(format!("unknown exe: {}", report_id)));
                 }
             },
             CHANNEL_HUB_CONTROL => {
@@ -796,11 +754,7 @@ where
                             //let reset_cause = msg[4 + 1];
                             let _sw_vers_major = msg[4 + 2];
                             let _sw_vers_minor = msg[4 + 3];
-                            trace!(
-                                "PID_RESP {}.{}",
-                                _sw_vers_major,
-                                _sw_vers_major
-                            );
+                            trace!("PID_RESP {}.{}", _sw_vers_major, _sw_vers_major);
                         }
 
                         self.prod_id_verified = true;
@@ -812,10 +766,7 @@ where
                     }
                     SHUB_FRS_WRITE_RESP => {
                         //0xF5
-                        trace!(
-                            "write resp: {}",
-                            self._frs_status_to_str(&msg[5])
-                        );
+                        trace!("write resp: {}", self._frs_status_to_str(&msg[5]));
                         let status = msg[5];
                         self.frs_write_status = status
                         // match status {
@@ -904,18 +855,17 @@ where
     /// Tell the sensor to start reporting the fused rotation vector
     /// on a regular cadence. Note that the maximum valid update rate
     /// is 1 kHz, based on the max update rate of the sensor's gyros.
-    /// Returns True if the report was successfully enabled. Otherwise returns False.
+    /// Returns True if the report was successfully enabled. Otherwise returns
+    /// False.
     pub fn enable_rotation_vector(
         &mut self,
         millis_between_reports: u16,
     ) -> Result<bool, WrapperError<SE>> {
-        self.enable_report(
-            SENSOR_REPORTID_ROTATION_VECTOR,
-            millis_between_reports,
-        )
+        self.enable_report(SENSOR_REPORTID_ROTATION_VECTOR, millis_between_reports)
     }
 
-    /// Enables reporting of linear acceleration vector. Returns True if the report was successfully enabled. Otherwise returns False.
+    /// Enables reporting of linear acceleration vector. Returns True if the
+    /// report was successfully enabled. Otherwise returns False.
     pub fn enable_linear_accel(
         &mut self,
         millis_between_reports: u16,
@@ -923,27 +873,28 @@ where
         self.enable_report(SENSOR_REPORTID_LINEAR_ACCEL, millis_between_reports)
     }
 
-    /// Enables reporting of gyroscope data. Returns True if the report was successfully enabled. Otherwise returns False.
-    pub fn enable_gyro(
-        &mut self,
-        millis_between_reports: u16,
-    ) -> Result<bool, WrapperError<SE>> {
+    /// Enables reporting of gyroscope data. Returns True if the report was
+    /// successfully enabled. Otherwise returns False.
+    pub fn enable_gyro(&mut self, millis_between_reports: u16) -> Result<bool, WrapperError<SE>> {
         self.enable_report(SENSOR_REPORTID_GYROSCOPE, millis_between_reports)
     }
 
-    /// Enables reporting of linear acceleration vector. Returns True if the report was successfully enabled. Otherwise returns False.
+    /// Enables reporting of linear acceleration vector. Returns True if the
+    /// report was successfully enabled. Otherwise returns False.
     pub fn enable_gravity(
         &mut self,
         millis_between_reports: u16,
     ) -> Result<bool, WrapperError<SE>> {
         self.enable_report(SENSOR_REPORTID_GRAVITY, millis_between_reports)
     }
+
     pub fn report_update_time(&self, report_id: u8) -> u128 {
         if report_id as usize <= self.report_enabled.len() {
             return self.report_update_time[report_id as usize];
         }
         0
     }
+
     pub fn is_report_enabled(&self, report_id: u8) -> bool {
         if report_id as usize <= self.report_enabled.len() {
             return self.report_enabled[report_id as usize];
@@ -962,14 +913,12 @@ where
             .or_insert_with(|| Box::new(func));
     }
 
-    pub fn remove_sensor_report_callback(
-        &mut self,
-        report_id: u8,
-        key: String,
-    ) {
+    pub fn remove_sensor_report_callback(&mut self, report_id: u8, key: String) {
         self.report_update_callbacks[report_id as usize].remove(&key);
     }
-    /// Enable a particular report. Returns True if the report was successfully enabled. Otherwise returns False.
+
+    /// Enable a particular report. Returns True if the report was successfully
+    /// enabled. Otherwise returns False.
     pub fn enable_report(
         &mut self,
         report_id: u8,
@@ -977,8 +926,7 @@ where
     ) -> Result<bool, WrapperError<SE>> {
         trace!("enable_report 0x{:X}", report_id);
 
-        let micros_between_reports: u32 =
-            (millis_between_reports as u32) * 1000;
+        let micros_between_reports: u32 = (millis_between_reports as u32) * 1000;
         let cmd_body: [u8; 17] = [
             SHUB_REPORT_SET_FEATURE_CMD,
             report_id,
@@ -989,7 +937,7 @@ where
             (micros_between_reports.shr(8) & 0xFFu32) as u8,
             (micros_between_reports.shr(16) & 0xFFu32) as u8,
             (micros_between_reports.shr(24) & 0xFFu32) as u8, // MSB report interval
-            0, // LSB Batch Interval
+            0,                                                // LSB Batch Interval
             0,
             0,
             0, // MSB Batch interval
@@ -1003,9 +951,7 @@ where
         self.send_packet(CHANNEL_HUB_CONTROL, &cmd_body)?;
         // any error or success in configuration will arrive some time later
         let start = Instant::now();
-        while !self.report_enabled[report_id as usize]
-            && start.elapsed().as_millis() < 2000
-        {
+        while !self.report_enabled[report_id as usize] && start.elapsed().as_millis() < 2000 {
             let rc = self.receive_packet_with_timeout(250);
             if rc.is_ok() {
                 let received_len = rc.unwrap();
@@ -1053,9 +999,7 @@ where
         let _ = self.send_packet(CHANNEL_HUB_CONTROL, cmd_body_req.as_ref())?;
         self.frs_write_status = FRS_STATUS_NO_DATA;
         let mut start = Instant::now();
-        while self.frs_write_status == FRS_STATUS_NO_DATA
-            && start.elapsed().as_millis() < timeout
-        {
+        while self.frs_write_status == FRS_STATUS_NO_DATA && start.elapsed().as_millis() < timeout {
             let rc = self.receive_packet_with_timeout(250);
             if rc.is_ok() {
                 let received_len = rc.unwrap();
@@ -1099,9 +1043,7 @@ where
 
         self.frs_write_status = FRS_STATUS_NO_DATA;
         start = Instant::now();
-        while self.frs_write_status == FRS_STATUS_NO_DATA
-            && start.elapsed().as_millis() < 800
-        {
+        while self.frs_write_status == FRS_STATUS_NO_DATA && start.elapsed().as_millis() < 800 {
             let rc = self.receive_packet_with_timeout(250);
             if rc.is_ok() {
                 let received_len = rc.unwrap();
@@ -1172,20 +1114,14 @@ where
         ];
         self.sequence_numbers[channel as usize] += 1;
 
-        self.packet_send_buf[..PACKET_HEADER_LENGTH]
-            .copy_from_slice(packet_header.as_ref());
-        self.packet_send_buf[PACKET_HEADER_LENGTH..packet_length]
-            .copy_from_slice(body_data);
+        self.packet_send_buf[..PACKET_HEADER_LENGTH].copy_from_slice(packet_header.as_ref());
+        self.packet_send_buf[PACKET_HEADER_LENGTH..packet_length].copy_from_slice(body_data);
 
         packet_length
     }
 
     /// Send packet from our packet send buf
-    fn send_packet(
-        &mut self,
-        channel: u8,
-        body_data: &[u8],
-    ) -> Result<usize, WrapperError<SE>> {
+    fn send_packet(&mut self, channel: u8, body_data: &[u8]) -> Result<usize, WrapperError<SE>> {
         let packet_length = self.prep_send_packet(channel, body_data);
         // trace!("Sending {:?}", &self.packet_send_buf[..packet_length]);
 
@@ -1236,10 +1172,8 @@ where
         if self.sensor_interface.requires_soft_reset() {
             self.send_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref())?;
         } else {
-            let response_size = self.send_and_receive_packet(
-                CHANNEL_HUB_CONTROL,
-                cmd_body.as_ref(),
-            )?;
+            let response_size =
+                self.send_and_receive_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref())?;
             if response_size > 0 {
                 match self.handle_received_packet(response_size) {
                     Ok(_) => {}
@@ -1287,9 +1221,7 @@ where
     /// QY normalized quaternion – Y | range: 0.0 – 1.0 ( ±π/2 )
     /// QZ normalized quaternion – Z | range: 0.0 – 1.0 ( ±π )
     /// QW normalized quaternion – W | range: 0.0 – 1.0
-    pub fn game_rotation_quaternion(
-        &self,
-    ) -> Result<[f32; 4], WrapperError<SE>> {
+    pub fn game_rotation_quaternion(&self) -> Result<[f32; 4], WrapperError<SE>> {
         Ok(self.game_rotation_quaternion)
     }
 
@@ -1298,15 +1230,14 @@ where
     /// QY normalized quaternion – Y | range: 0.0 – 1.0 ( ±π/2 )
     /// QZ normalized quaternion – Z | range: 0.0 – 1.0 ( ±π )
     /// QW normalized quaternion – W | range: 0.0 – 1.0
-    pub fn geomag_rotation_quaternion(
-        &self,
-    ) -> Result<[f32; 4], WrapperError<SE>> {
+    pub fn geomag_rotation_quaternion(&self) -> Result<[f32; 4], WrapperError<SE>> {
         Ok(self.rotation_quaternion)
     }
 
     pub fn geomag_rotation_acc(&self) -> f32 {
         self.geomag_rotation_acc
     }
+
     /// Read linear acceleration (m/s^2)
     pub fn linear_accel(&self) -> Result<[f32; 3], WrapperError<SE>> {
         Ok(self.linear_accel)
@@ -1340,8 +1271,7 @@ where
         trace!("soft_reset");
         let data: [u8; 1] = [EXECUTABLE_DEVICE_CMD_RESET];
         // send command packet and ignore received packets
-        let received_len =
-            self.send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
+        let received_len = self.send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
         if received_len > 0 {
             match self.handle_received_packet(received_len) {
                 Ok(_) => {}
@@ -1390,8 +1320,8 @@ const CHANNEL_HUB_CONTROL: u8 = 2;
 /// sensor hub control channel
 const CHANNEL_SENSOR_REPORTS: u8 = 3;
 /// input sensor reports (non-wake, not gyroRV)
-//const  CHANNEL_WAKE_REPORTS: usize = 4; /// wake input sensor reports (for sensors configured as wake up sensors)
-//const  CHANNEL_GYRO_ROTATION: usize = 5; ///  gyro rotation vector (gyroRV)
+//const  CHANNEL_WAKE_REPORTS: usize = 4; /// wake input sensor reports (for sensors configured as
+// wake up sensors) const  CHANNEL_GYRO_ROTATION: usize = 5; ///  gyro rotation vector (gyroRV)
 
 /// Command Channel requests / responses
 
@@ -1434,14 +1364,16 @@ pub const SENSOR_REPORTID_MAGNETIC_FIELD: u8 = 0x03;
 /// Linear acceleration (m/s^2 minus gravity): Q point 8
 pub const SENSOR_REPORTID_LINEAR_ACCEL: u8 = 0x04;
 
-/// Unit quaternion rotation vector, Q point 14, with heading accuracy estimate (radians) Q point 12
+/// Unit quaternion rotation vector, Q point 14, with heading accuracy estimate
+/// (radians) Q point 12
 pub const SENSOR_REPORTID_ROTATION_VECTOR: u8 = 0x05;
 pub const SENSOR_REPORTID_GRAVITY: u8 = 0x06; // Q point 8
 /// Gyroscope uncalibrated (rad/s): Q point 9
 pub const SENSOR_REPORTID_GYROSCOPE_UNCALIB: u8 = 0x07;
 // 0x08 game rotation vector : Q point 14
 pub const SENSOR_REPORTID_ROTATION_VECTOR_GAME: u8 = 0x08;
-// 0x09 geomagnetic rotation vector: Q point 14 for quaternion, Q point 12 for heading accuracy
+// 0x09 geomagnetic rotation vector: Q point 14 for quaternion, Q point 12 for
+// heading accuracy
 pub const SENSOR_REPORTID_ROTATION_VECTOR_GEOMAGNETIC: u8 = 0x09;
 
 // 0x0A pressure (hectopascals) from external baro: Q point 20
@@ -1482,8 +1414,7 @@ const EXECUTABLE_DEVICE_RESP_RESET_COMPLETE: u8 = 1;
 const SH2_INIT_UNSOLICITED: u8 = 0x80;
 const SH2_CMD_INITIALIZE: u8 = 4;
 const SH2_INIT_SYSTEM: u8 = 1;
-const SH2_STARTUP_INIT_UNSOLICITED: u8 =
-    SH2_CMD_INITIALIZE | SH2_INIT_UNSOLICITED;
+const SH2_STARTUP_INIT_UNSOLICITED: u8 = SH2_CMD_INITIALIZE | SH2_INIT_UNSOLICITED;
 
 #[cfg(test)]
 mod tests {
@@ -1505,28 +1436,24 @@ mod tests {
 
     // Actual advertising packet received from sensor:
     pub const ADVERTISING_PACKET_FULL: [u8; 276] = [
-        0x14, 0x81, 0x00, 0x01, 0x00, 0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x80,
-        0x06, 0x31, 0x2e, 0x30, 0x2e, 0x30, 0x00, 0x02, 0x02, 0x00, 0x01, 0x03,
-        0x02, 0xff, 0x7f, 0x04, 0x02, 0x00, 0x01, 0x05, 0x02, 0xff, 0x7f, 0x08,
-        0x05, 0x53, 0x48, 0x54, 0x50, 0x00, 0x06, 0x01, 0x00, 0x09, 0x08, 0x63,
-        0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c, 0x00, 0x01, 0x04, 0x01, 0x00, 0x00,
-        0x00, 0x08, 0x0b, 0x65, 0x78, 0x65, 0x63, 0x75, 0x74, 0x61, 0x62, 0x6c,
-        0x65, 0x00, 0x06, 0x01, 0x01, 0x09, 0x07, 0x64, 0x65, 0x76, 0x69, 0x63,
-        0x65, 0x00, 0x01, 0x04, 0x02, 0x00, 0x00, 0x00, 0x08, 0x0a, 0x73, 0x65,
-        0x6e, 0x73, 0x6f, 0x72, 0x68, 0x75, 0x62, 0x00, 0x06, 0x01, 0x02, 0x09,
-        0x08, 0x63, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c, 0x00, 0x06, 0x01, 0x03,
-        0x09, 0x0c, 0x69, 0x6e, 0x70, 0x75, 0x74, 0x4e, 0x6f, 0x72, 0x6d, 0x61,
-        0x6c, 0x00, 0x07, 0x01, 0x04, 0x09, 0x0a, 0x69, 0x6e, 0x70, 0x75, 0x74,
-        0x57, 0x61, 0x6b, 0x65, 0x00, 0x06, 0x01, 0x05, 0x09, 0x0c, 0x69, 0x6e,
-        0x70, 0x75, 0x74, 0x47, 0x79, 0x72, 0x6f, 0x52, 0x76, 0x00, 0x80, 0x06,
-        0x31, 0x2e, 0x31, 0x2e, 0x30, 0x00, 0x81, 0x64, 0xf8, 0x10, 0xf5, 0x04,
-        0xf3, 0x10, 0xf1, 0x10, 0xfb, 0x05, 0xfa, 0x05, 0xfc, 0x11, 0xef, 0x02,
-        0x01, 0x0a, 0x02, 0x0a, 0x03, 0x0a, 0x04, 0x0a, 0x05, 0x0e, 0x06, 0x0a,
-        0x07, 0x10, 0x08, 0x0c, 0x09, 0x0e, 0x0a, 0x08, 0x0b, 0x08, 0x0c, 0x06,
-        0x0d, 0x06, 0x0e, 0x06, 0x0f, 0x10, 0x10, 0x05, 0x11, 0x0c, 0x12, 0x06,
-        0x13, 0x06, 0x14, 0x10, 0x15, 0x10, 0x16, 0x10, 0x17, 0x00, 0x18, 0x08,
-        0x19, 0x06, 0x1a, 0x00, 0x1b, 0x00, 0x1c, 0x06, 0x1d, 0x00, 0x1e, 0x10,
-        0x1f, 0x00, 0x20, 0x00, 0x21, 0x00, 0x22, 0x00, 0x23, 0x00, 0x24, 0x00,
-        0x25, 0x00, 0x26, 0x00, 0x27, 0x00, 0x28, 0x0e, 0x29, 0x0c, 0x2a, 0x0e,
+        0x14, 0x81, 0x00, 0x01, 0x00, 0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x80, 0x06, 0x31, 0x2e,
+        0x30, 0x2e, 0x30, 0x00, 0x02, 0x02, 0x00, 0x01, 0x03, 0x02, 0xff, 0x7f, 0x04, 0x02, 0x00,
+        0x01, 0x05, 0x02, 0xff, 0x7f, 0x08, 0x05, 0x53, 0x48, 0x54, 0x50, 0x00, 0x06, 0x01, 0x00,
+        0x09, 0x08, 0x63, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c, 0x00, 0x01, 0x04, 0x01, 0x00, 0x00,
+        0x00, 0x08, 0x0b, 0x65, 0x78, 0x65, 0x63, 0x75, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x00, 0x06,
+        0x01, 0x01, 0x09, 0x07, 0x64, 0x65, 0x76, 0x69, 0x63, 0x65, 0x00, 0x01, 0x04, 0x02, 0x00,
+        0x00, 0x00, 0x08, 0x0a, 0x73, 0x65, 0x6e, 0x73, 0x6f, 0x72, 0x68, 0x75, 0x62, 0x00, 0x06,
+        0x01, 0x02, 0x09, 0x08, 0x63, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c, 0x00, 0x06, 0x01, 0x03,
+        0x09, 0x0c, 0x69, 0x6e, 0x70, 0x75, 0x74, 0x4e, 0x6f, 0x72, 0x6d, 0x61, 0x6c, 0x00, 0x07,
+        0x01, 0x04, 0x09, 0x0a, 0x69, 0x6e, 0x70, 0x75, 0x74, 0x57, 0x61, 0x6b, 0x65, 0x00, 0x06,
+        0x01, 0x05, 0x09, 0x0c, 0x69, 0x6e, 0x70, 0x75, 0x74, 0x47, 0x79, 0x72, 0x6f, 0x52, 0x76,
+        0x00, 0x80, 0x06, 0x31, 0x2e, 0x31, 0x2e, 0x30, 0x00, 0x81, 0x64, 0xf8, 0x10, 0xf5, 0x04,
+        0xf3, 0x10, 0xf1, 0x10, 0xfb, 0x05, 0xfa, 0x05, 0xfc, 0x11, 0xef, 0x02, 0x01, 0x0a, 0x02,
+        0x0a, 0x03, 0x0a, 0x04, 0x0a, 0x05, 0x0e, 0x06, 0x0a, 0x07, 0x10, 0x08, 0x0c, 0x09, 0x0e,
+        0x0a, 0x08, 0x0b, 0x08, 0x0c, 0x06, 0x0d, 0x06, 0x0e, 0x06, 0x0f, 0x10, 0x10, 0x05, 0x11,
+        0x0c, 0x12, 0x06, 0x13, 0x06, 0x14, 0x10, 0x15, 0x10, 0x16, 0x10, 0x17, 0x00, 0x18, 0x08,
+        0x19, 0x06, 0x1a, 0x00, 0x1b, 0x00, 0x1c, 0x06, 0x1d, 0x00, 0x1e, 0x10, 0x1f, 0x00, 0x20,
+        0x00, 0x21, 0x00, 0x22, 0x00, 0x23, 0x00, 0x24, 0x00, 0x25, 0x00, 0x26, 0x00, 0x27, 0x00,
+        0x28, 0x0e, 0x29, 0x0c, 0x2a, 0x0e,
     ];
 }

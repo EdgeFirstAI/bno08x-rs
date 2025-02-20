@@ -2,8 +2,7 @@ use bno08x::wrapper::{BNO08x, SENSOR_REPORTID_ACCELEROMETER};
 use std::io;
 
 fn main() -> io::Result<()> {
-    let mut imu_driver =
-        BNO08x::new_bno08x_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
+    let mut imu_driver = BNO08x::new_bno08x_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
 
     imu_driver.init().unwrap();
 

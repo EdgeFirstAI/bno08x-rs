@@ -35,20 +35,20 @@ pub trait OutputPin {
 
     /// Drives the pin low
     ///
-    /// *NOTE* the actual electrical state of the pin may not actually be low, e.g. due to external
-    /// electrical sources
+    /// *NOTE* the actual electrical state of the pin may not actually be low,
+    /// e.g. due to external electrical sources
     fn set_low(&mut self) -> Result<(), Self::Error>;
 
     /// Drives the pin high
     ///
-    /// *NOTE* the actual electrical state of the pin may not actually be high, e.g. due to external
-    /// electrical sources
+    /// *NOTE* the actual electrical state of the pin may not actually be high,
+    /// e.g. due to external electrical sources
     fn set_high(&mut self) -> Result<(), Self::Error>;
 
     /// Drives the pin high or low depending on the provided value
     ///
-    /// *NOTE* the actual electrical state of the pin may not actually be high or low, e.g. due to external
-    /// electrical sources
+    /// *NOTE* the actual electrical state of the pin may not actually be high
+    /// or low, e.g. due to external electrical sources
     fn set_state(&mut self, state: PinState) -> Result<(), Self::Error> {
         match state {
             PinState::Low => self.set_low(),
@@ -90,6 +90,7 @@ impl OutputPin for GpiodOut {
         self.output.set_values([false])?;
         Ok(())
     }
+
     fn set_high(&mut self) -> Result<(), Self::Error> {
         self.output.set_values([true])?;
         Ok(())
@@ -112,6 +113,7 @@ impl GpiodIn {
 
 impl InputPin for GpiodIn {
     type Error = io::Error;
+
     /// Is the input pin high?
     fn is_high(&self) -> Result<bool, Self::Error> {
         let values = self.input.get_values([false])?;

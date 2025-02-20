@@ -3,18 +3,14 @@ extern crate spidev;
 use log::trace;
 use spidev::{SpiModeFlags, Spidev, SpidevOptions, SpidevTransfer};
 
-use std::path::Path;
-use std::{io, vec};
+use std::{io, path::Path, vec};
 /// Blocking transfer
 pub trait Transfer {
     /// Error type
     type Error;
 
     /// Sends `words` to the slave. Returns the `words` received from the slave
-    fn transfer<'a>(
-        &'a mut self,
-        words: &'a mut [u8],
-    ) -> Result<&[u8], Self::Error>;
+    fn transfer<'a>(&'a mut self, words: &'a mut [u8]) -> Result<&[u8], Self::Error>;
 }
 
 /// Blocking write
@@ -46,10 +42,8 @@ impl SpiDevice {
 
 impl Transfer for SpiDevice {
     type Error = io::Error;
-    fn transfer<'a>(
-        &'a mut self,
-        words: &'a mut [u8],
-    ) -> Result<&[u8], Self::Error> {
+
+    fn transfer<'a>(&'a mut self, words: &'a mut [u8]) -> Result<&[u8], Self::Error> {
         let mut rx_buf = vec![0_u8; words.len()];
         let buf = rx_buf.as_mut();
         trace!("Transfer write: {:?}", words);
@@ -63,6 +57,7 @@ impl Transfer for SpiDevice {
 
 impl Write for SpiDevice {
     type Error = io::Error;
+
     fn write(&mut self, words: &[u8]) -> Result<(), Self::Error> {
         trace!("Write: {:?}", words);
         let mut rx_buf = vec![0_u8; words.len()];
