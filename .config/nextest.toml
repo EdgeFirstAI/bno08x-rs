@@ -1,0 +1,26 @@
+# Configuration for cargo-nextest
+# Reference: https://nexte.st/docs/configuration/
+
+[profile.default]
+# Run tests with all available threads
+test-threads = "num-cpus"
+
+# Retry flaky tests up to 2 times
+retries = 2
+
+# Show output for failing tests
+failure-output = "immediate-final"
+
+# Show output for passing tests on failure
+success-output = "final"
+
+# Timeout for each test (hardware tests may need longer)
+slow-timeout = { period = "60s", terminate-after = 2 }
+
+[profile.ci]
+# CI-specific configuration
+test-threads = "num-cpus"
+retries = 0
+failure-output = "immediate-final"
+success-output = "never"
+slow-timeout = { period = "120s", terminate-after = 1 }

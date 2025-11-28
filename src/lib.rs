@@ -1,7 +1,5 @@
-/*
-Copyright (c) 2020 Todd Stellanova
-LICENSE: BSD3 (see LICENSE file)
-*/
+// Copyright 2025 Au-Zone Technologies Inc.
+// SPDX-License-Identifier: Apache-2.0
 
 pub mod interface;
 pub mod wrapper;

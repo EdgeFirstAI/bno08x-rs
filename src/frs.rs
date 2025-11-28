@@ -1,3 +1,6 @@
+// Copyright 2025 Au-Zone Technologies Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use bno08x::wrapper::{BNO08x, SENSOR_REPORTID_ACCELEROMETER};
 use std::io;
 

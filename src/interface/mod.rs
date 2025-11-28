@@ -1,3 +1,6 @@
+// Copyright 2025 Au-Zone Technologies Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 // pub mod i2c;
 pub mod delay;
 pub mod gpio;

@@ -1,3 +1,6 @@
+// Copyright 2025 Au-Zone Technologies Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Delays
 //!
 //! # What's the difference between these traits and the `timer::CountDown` trait?

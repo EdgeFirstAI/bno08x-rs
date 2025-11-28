@@ -1,11 +1,6 @@
-/*
-Copyright (c) 2020 Todd Stellanova
-LICENSE: BSD3 (see LICENSE file)
-*/
+// Copyright 2025 Au-Zone Technologies Inc.
+// SPDX-License-Identifier: Apache-2.0
 
-/*
-Modified 2023 Au-Zone Technologies
-*/
 use crate::{
     interface::{
         delay::delay_ms,

@@ -1,0 +1,47 @@
+# GitHub Actions workflow for SBOM generation
+name: SBOM
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  sbom:
+    name: Generate SBOM
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install scancode-toolkit
+        run: |
+          python3 -m venv venv
+          venv/bin/pip install scancode-toolkit
+
+      - name: Generate SBOM
+        run: |
+          .github/scripts/generate_sbom.sh
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.json
+          retention-days: 90
+
+      - name: Check license policy
+        run: |
+          python3 .github/scripts/check_license_policy.py sbom.json
+
+      - name: Validate NOTICE file
+        run: |
+          python3 .github/scripts/validate_notice.py sbom.json NOTICE

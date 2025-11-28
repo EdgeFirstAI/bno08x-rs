@@ -1,7 +1,8 @@
 [package]
 name = "bno08x"
 description = "BNO08x IMU User Space Driver"
-repository = "https://bitbucket.org/au-zone/bno08x-rs"
+repository = "https://github.com/EdgeFirstAI/bno08x"
+license = "Apache-2.0"
 version = "1.0.1"
 edition = "2021"
 readme = "README.md"
