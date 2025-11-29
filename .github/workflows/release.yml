@@ -1,97 +1,206 @@
-# GitHub Actions workflow for creating releases
+# GitHub Actions workflow for publishing releases
+#
+# This workflow publishes release artifacts when a version tag is pushed:
+# - Rust crate to crates.io
+# - GitHub Release with changelog notes and SBOM
+#
+# Release Process:
+# 1. Update version in Cargo.toml
+# 2. Update CHANGELOG.md with version and date
+# 3. Commit: git commit -m "chore: prepare v1.0.0 release"
+# 4. Create tag: git tag v1.0.0
+# 5. Push: git push origin main --tags
+#
+# This workflow then:
+# - Extracts changelog for this version
+# - Generates SBOM via sbom.yml workflow
+# - Publishes Rust crate to crates.io
+# - Creates GitHub Release with artifacts
+#
+# Triggered by: git push --tags (tags matching v*)
+#
+# Publishing Configuration:
+# - crates.io: Uses CARGO_REGISTRY_TOKEN secret
+#   Configure at: Repository Settings → Secrets → Actions
+#   Create token at: https://crates.io/settings/tokens
+#
+# Action Versions (hash-pinned per SPS v2.1):
+# - actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 (v4.2.2)
+# - actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 (v4.1.8)
+# - dtolnay/rust-toolchain@7b1c307e0dcbda6122208f10795a713336a9b35a (stable)
+# - softprops/action-gh-release@c062e08bd532815e2082a85e87e3ef29c3e6d191 (v2.0.8)
+
 name: Release
 
 on:
   push:
-    tags: [ 'v*' ]
-
-permissions:
-  contents: write
-  id-token: write
-
-env:
-  CARGO_TERM_COLOR: always
+    tags:
+      - 'v*'
 
 jobs:
-  create-release:
-    name: Create GitHub Release
+  # Extract version and changelog for use in other jobs
+  prepare-release:
+    name: Prepare Release Information
     runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      changelog: ${{ steps.changelog.outputs.changelog }}
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 0
 
       - name: Extract version from tag
-        id: get_version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: Install scancode-toolkit
+        id: version
         run: |
-          python3 -m venv venv
-          venv/bin/pip install scancode-toolkit
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Extracted version: $VERSION"
 
-      - name: Generate SBOM
+      - name: Extract changelog for this version
+        id: changelog
         run: |
-          .github/scripts/generate_sbom.sh
+          VERSION=${GITHUB_REF#refs/tags/v}
 
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ steps.get_version.outputs.VERSION }}
-          body: |
-            Release ${{ steps.get_version.outputs.VERSION }}
-            
-            ## Installation
-            
-            Add to your `Cargo.toml`:
-            ```toml
-            [dependencies]
-            bno08x = "${{ steps.get_version.outputs.VERSION }}"
-            ```
-            
-            ## Links
-            
-            - [crates.io](https://crates.io/crates/bno08x)
-            - [Documentation](https://docs.rs/bno08x/${{ steps.get_version.outputs.VERSION }})
-            - [CHANGELOG](https://github.com/EdgeFirstAI/bno08x/blob/main/CHANGELOG.md)
-          draft: false
-          prerelease: false
+          # Extract changelog section for this version
+          # Format: ## [X.Y.Z] - YYYY-MM-DD
+          CHANGELOG=$(awk -v ver="$VERSION" '
+            /^## \['"$VERSION"'\]/ { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md)
 
-      - name: Upload SBOM
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./sbom.json
-          asset_name: sbom.json
-          asset_content_type: application/json
+          if [ -z "$CHANGELOG" ]; then
+            echo "WARNING: No changelog entry found for version $VERSION"
+            CHANGELOG="Release $VERSION"
+          fi
 
-  publish-crate:
+          # Save to file and output
+          echo "$CHANGELOG" > /tmp/changelog.txt
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          echo "Extracted changelog:"
+          cat /tmp/changelog.txt
+
+  # Generate SBOM using the sbom.yml workflow
+  build-sbom:
+    name: Generate SBOM
+    needs: prepare-release
+    uses: ./.github/workflows/sbom.yml
+
+  # Publish Rust crate to crates.io
+  publish-crates:
     name: Publish to crates.io
-    needs: create-release
     runs-on: ubuntu-22.04
+    needs: prepare-release
     environment:
       name: crates-io
       url: https://crates.io/crates/bno08x
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@7b1c307e0dcbda6122208f10795a713336a9b35a  # stable
 
-      - name: Publish to crates.io (trusted publishing)
+      - name: Verify version matches tag
+        run: |
+          TAG_VERSION="${{ needs.prepare-release.outputs.version }}"
+          CARGO_VERSION=$(grep '^version = ' Cargo.toml | head -1 | cut -d'"' -f2)
+
+          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "ERROR: Tag version ($TAG_VERSION) does not match Cargo.toml version ($CARGO_VERSION)"
+            exit 1
+          fi
+
+          echo "Version verified: $TAG_VERSION"
+
+      - name: Run tests before publish
+        run: |
+          cargo test --lib --workspace
+
+      - name: Publish to crates.io
         run: cargo publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  # Create GitHub Release with all artifacts
+  create-github-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-22.04
+    needs:
+      - prepare-release
+      - build-sbom
+      - publish-crates
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Download SBOM artifact
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16  # v4.1.8
+        with:
+          name: sbom
+          path: artifacts/sbom
+
+      - name: Organize release assets
+        run: |
+          mkdir -p release-assets
+
+          # SBOM
+          if [ -f artifacts/sbom/sbom.json ]; then
+            cp artifacts/sbom/sbom.json \
+               release-assets/bno08x-${{ needs.prepare-release.outputs.version }}-sbom.json
+            echo "✓ SBOM copied"
+          else
+            echo "⚠ SBOM not found"
+          fi
+
+          echo ""
+          echo "Release assets prepared:"
+          ls -lh release-assets/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@c062e08bd532815e2082a85e87e3ef29c3e6d191  # v2.0.8
+        with:
+          name: bno08x v${{ needs.prepare-release.outputs.version }}
+          body: |
+            # bno08x v${{ needs.prepare-release.outputs.version }}
+
+            ## Installation
+
+            ### Rust (crates.io)
+            ```toml
+            [dependencies]
+            bno08x = "${{ needs.prepare-release.outputs.version }}"
+            ```
+
+            ---
+
+            ## What's Changed
+
+            ${{ needs.prepare-release.outputs.changelog }}
+
+            ---
+
+            ## Assets
+
+            - **SBOM**: `bno08x-${{ needs.prepare-release.outputs.version }}-sbom.json` (CycloneDX format)
+
+            ## Links
+
+            - [crates.io](https://crates.io/crates/bno08x/${{ needs.prepare-release.outputs.version }})
+            - [Documentation](https://docs.rs/bno08x/${{ needs.prepare-release.outputs.version }})
+            - [Changelog](https://github.com/EdgeFirstAI/bno08x/blob/main/CHANGELOG.md)
+          files: |
+            release-assets/*
+          draft: false
+          prerelease: ${{ contains(needs.prepare-release.outputs.version, '-') }}
+          fail_on_unmatched_files: false

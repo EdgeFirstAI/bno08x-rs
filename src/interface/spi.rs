@@ -12,7 +12,7 @@ use crate::{
         SensorCommon, PACKET_HEADER_LENGTH,
     },
     Error,
-    Error::SensorUnresponsive,
+    Error::{BufferOverflow, NoDataAvailable, SensorUnresponsive},
 };
 use std::fmt::Debug;
 
@@ -155,16 +155,18 @@ where
         }
 
         // Copy the write message into the buffer
-        for i in 0..send_buf.len() {
-            recv_buf[i] = send_buf[i];
-        }
+        recv_buf[..send_buf.len()].copy_from_slice(send_buf);
         let total_packet_len = std::cmp::max(read_packet_len, send_buf.len());
         if total_packet_len > recv_buf.len() {
-            // TODO: Figure out how to instantiate an Communication Error
-            // return Err(Error::Comm(String::from(
-            //     "Total packet length greater than recv buffer size",
-            // )));
-            error!("Total packet length greater than recv buffer size");
+            error!(
+                "Total packet length ({}) greater than recv buffer size ({})",
+                total_packet_len,
+                recv_buf.len()
+            );
+            return Err(BufferOverflow {
+                packet_size: total_packet_len,
+                buffer_size: recv_buf.len(),
+            });
         }
         delay_ms(5);
         let rc = self.spi.transfer(&mut recv_buf[..total_packet_len]);
@@ -179,20 +181,15 @@ where
     }
 
     fn write_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError> {
-        let rc = self.spi.write(packet).map_err(Error::Comm);
-        if rc.is_err() {
-            return Err(rc.unwrap_err());
-        }
-
+        self.spi.write(packet).map_err(Error::Comm)?;
         Ok(())
     }
 
     /// Read a complete packet from the sensor
     fn read_packet(&mut self, recv_buf: &mut [u8]) -> Result<usize, Self::SensorError> {
         if !self.block_on_hintn(1000) {
-            // TODO: Figure out how to instantiate an Communication Error
-            // return Err(Error::Comm(String::from("No message to read").into()));
-            error!("No message to read");
+            error!("No message to read - HINTN timeout");
+            return Err(NoDataAvailable);
         }
         // As soon as host selects CSN, HINTN resets
 

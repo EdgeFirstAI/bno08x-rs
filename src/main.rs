@@ -8,22 +8,17 @@ use bno08x::{
         spidev::SpiDevice,
         SpiInterface,
     },
-    wrapper::{
-        BNO08x, SENSOR_REPORTID_ACCELEROMETER, SENSOR_REPORTID_GYROSCOPE,
-        SENSOR_REPORTID_MAGNETIC_FIELD, SENSOR_REPORTID_ROTATION_VECTOR,
-    },
+    BNO08x, SENSOR_REPORTID_ACCELEROMETER, SENSOR_REPORTID_GYROSCOPE,
+    SENSOR_REPORTID_MAGNETIC_FIELD, SENSOR_REPORTID_ROTATION_VECTOR,
 };
-use std::{
-    f32::consts::PI,
-    io::{self},
-};
+use std::{f32::consts::PI, io};
 
 const RAD_TO_DEG: f32 = 180f32 / PI;
+
 // https://stackoverflow.com/a/37560411
 fn quaternion_to_euler(qr: f32, qi: f32, qj: f32, qk: f32) -> [f32; 3] {
     let yaw = (2.0 * (qk * qr + qi * qj)).atan2(-1.0 + 2.0 * (qr * qr + qi * qi)) * RAD_TO_DEG;
     let pitch = (2.0 * (qj * qr - qk * qi)).asin() * RAD_TO_DEG;
-
     let roll = (2.0 * (qk * qj + qr * qi)).atan2(1.0 - 2.0 * (qi * qi + qj * qj)) * RAD_TO_DEG;
 
     [yaw, pitch, roll]
@@ -76,7 +71,7 @@ fn print_info(imu_driver: &BNO08x<SpiInterface<SpiDevice, GpiodIn, GpiodOut>>) {
 }
 
 fn main() -> io::Result<()> {
-    let mut imu_driver = BNO08x::new_bno08x_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
+    let mut imu_driver = BNO08x::new_spi_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
 
     imu_driver.init().unwrap();
 
@@ -112,9 +107,6 @@ fn main() -> io::Result<()> {
     println!("loop_interval: {}", loop_interval);
     loop {
         let _msg_count = imu_driver.handle_messages(10, 20);
-        // if _msg_count > 0 {
-        //     println!("> {}", _msg_count);
-        // }
         delay_ms(loop_interval);
     }
 }

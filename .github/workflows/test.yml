@@ -1,13 +1,21 @@
 # GitHub Actions workflow for testing and code quality
 #
 # This workflow runs tests, performs static analysis, and collects coverage data
-# for the BNO08x driver.
+# for the BNO08x driver. Coverage is reported to SonarCloud.
 #
-# Action Versions (verified November 2025):
-# - actions/checkout@v4 (latest)
-# - dtolnay/rust-toolchain@stable (latest)
-# - actions/upload-artifact@v4 (latest)
-# - codecov/codecov-action@v3 (latest)
+# Action Versions (hash-pinned per SPS v2.1):
+# - actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 (v4.2.2)
+# - dtolnay/rust-toolchain@7b1c307e0dcbda6122208f10795a713336a9b35a (stable)
+# - actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a (v4.1.2)
+# - taiki-e/install-action@b4b80945859e8ef89a9732a0f46499a443b196fe (v2)
+# - actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 (v4.4.3)
+# - actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b (v5.3.0)
+# - SonarSource/sonarqube-scan-action@689fb39b34b9aa95ebc5f8f119343ddd51542402 (v4)
+#
+# Runner Notes:
+# - ubuntu-22.04: Standard GitHub-hosted runner (x86_64)
+# - ubuntu-22.04-arm: Custom larger runner (ARM64)
+# - raivin: Custom hardware runner with BNO08x sensor for integration tests
 
 name: Test
 
@@ -28,15 +36,16 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@7b1c307e0dcbda6122208f10795a713336a9b35a  # nightly
         with:
+          toolchain: nightly
           components: rustfmt
 
       - name: Check formatting
-        run: cargo fmt --all --check
+        run: cargo +nightly fmt --all --check
 
   clippy:
     name: Lint with Clippy
@@ -44,22 +53,22 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@7b1c307e0dcbda6122208f10795a713336a9b35a  # stable
         with:
           components: clippy
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a  # v4.1.2
         with:
           path: ~/.cargo/registry/index
           key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-index-
 
       - name: Cache cargo build
-        uses: actions/cache@v4
+        uses: actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a  # v4.1.2
         with:
           path: target
           key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
@@ -69,7 +78,7 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   test:
-    name: Test and Coverage (${{ matrix.platform.name }})
+    name: Unit Tests (${{ matrix.platform.name }})
     runs-on: ${{ matrix.platform.runner }}
     permissions:
       contents: read
@@ -88,28 +97,30 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           fetch-depth: 0  # Full history for better analysis
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@7b1c307e0dcbda6122208f10795a713336a9b35a  # stable
         with:
           components: llvm-tools-preview
           targets: ${{ matrix.platform.target }}
 
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+        uses: taiki-e/install-action@b4b80945859e8ef89a9732a0f46499a443b196fe  # v2
+        with:
+          tool: cargo-llvm-cov
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a  # v4.1.2
         with:
           path: ~/.cargo/registry/index
           key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-index-
 
       - name: Cache cargo build
-        uses: actions/cache@v4
+        uses: actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a  # v4.1.2
         with:
           path: target
           key: ${{ runner.os }}-${{ matrix.platform.name }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
@@ -121,62 +132,78 @@ jobs:
       - name: Run doc tests
         run: cargo test --doc --workspace
 
-      # Note: Integration tests require hardware (SPI, GPIO)
-      # and are skipped in CI. Run on target hardware with: cargo test --test '*'
-
       - name: Generate coverage
         run: |
-          # Only generate coverage for unit tests (--lib) and doc tests (--doc)
-          # Integration tests require hardware and are excluded
           cargo llvm-cov --lib --workspace --cobertura --output-path coverage.xml
-          cargo llvm-cov --doc --workspace --cobertura --output-path coverage-doc.xml || true
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v3
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882  # v4.4.3
         with:
-          files: coverage.xml
-          flags: ${{ matrix.platform.name }}
-          fail_ci_if_error: false
+          name: coverage-${{ matrix.platform.name }}
+          path: coverage.xml
+          retention-days: 30
 
-      - name: Upload test results
-        uses: actions/upload-artifact@v4
-        if: always()
+  hardware-test:
+    name: Hardware Integration Tests
+    runs-on: raivin
+    # Only run on main branch or when explicitly requested via label
+    if: github.ref == 'refs/heads/main' || contains(github.event.pull_request.labels.*.name, 'test-hardware')
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@7b1c307e0dcbda6122208f10795a713336a9b35a  # stable
         with:
-          name: test-results-${{ matrix.platform.name }}
-          path: |
-            coverage.xml
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@b4b80945859e8ef89a9732a0f46499a443b196fe  # v2
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Run integration tests
+        run: |
+          cargo test --test '*' -- --test-threads=1
+
+      - name: Generate hardware test coverage
+        run: |
+          cargo llvm-cov --test '*' --cobertura --output-path coverage-hardware.xml -- --test-threads=1
+
+      - name: Upload hardware coverage artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882  # v4.4.3
+        with:
+          name: coverage-hardware
+          path: coverage-hardware.xml
           retention-days: 30
 
   sonarcloud:
     name: SonarCloud Analysis
     runs-on: ubuntu-22.04
+    needs: [test]
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
-          fetch-depth: 0  # Shallow clones should be disabled for better analysis
+          fetch-depth: 0  # Full history for better analysis
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Download coverage artifacts
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16  # v4.1.8
         with:
-          components: llvm-tools-preview
+          pattern: coverage-*
+          path: coverage/
+          merge-multiple: true
 
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
-
-      - name: Generate coverage for SonarCloud
+      - name: List coverage files
         run: |
-          cargo llvm-cov --lib --workspace --cobertura --output-path target/rust-coverage.xml || true
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+          echo "Coverage files:"
+          find coverage/ -name "*.xml" -type f
 
       - name: SonarCloud Scan
-        uses: SonarSource/sonarcloud-github-action@master
+        uses: SonarSource/sonarqube-scan-action@689fb39b34b9aa95ebc5f8f119343ddd51542402  # v4
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
