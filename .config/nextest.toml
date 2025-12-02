@@ -24,3 +24,7 @@ retries = 0
 failure-output = "immediate-final"
 success-output = "never"
 slow-timeout = { period = "120s", terminate-after = 1 }
+
+# JUnit XML output for CI reporting
+[profile.ci.junit]
+path = "junit.xml"

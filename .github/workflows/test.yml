@@ -155,10 +155,11 @@ jobs:
           # Build test binaries with coverage instrumentation
           cargo test --no-run
 
-          # Copy instrumented test binaries to target/tests for artifact upload
+          # Copy only integration test binaries (not lib tests) to target/tests for artifact upload
+          # Integration tests from tests/ directory are named like "hardware_integration-<hash>"
           mkdir -p target/tests
           find target/llvm-cov-target/debug/deps/ -maxdepth 1 -type f -executable \
-            \( -name "bno08x*" -o -name "*integration*" \) -exec cp {} target/tests/ \;
+            -name "*integration*" -exec cp {} target/tests/ \;
 
           echo "Instrumented test binaries:"
           ls -la target/tests/
@@ -222,13 +223,13 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p coverage/profraw
-          
+
           # Set up profraw collection directory
           export LLVM_PROFILE_FILE="${{ github.workspace }}/coverage/profraw/raivin-%p-%m.profraw"
 
           # Track overall test status
           TEST_FAILED=0
-          
+
           # Run each test binary
           echo "Running pre-built integration test binaries..."
           for test_bin in integration-tests/*; do
@@ -236,7 +237,8 @@ jobs:
               test_name=$(basename "$test_bin")
               echo "=== Running $test_name ==="
               # --test-threads=1 for deterministic execution on hardware
-              if ! "$test_bin" --test-threads=1 2>&1 | tee "coverage/${test_name}.txt"; then
+              # --include-ignored to run hardware integration tests marked with #[ignore]
+              if ! "$test_bin" --test-threads=1 --include-ignored 2>&1 | tee "coverage/${test_name}.txt"; then
                 echo "FAILED: $test_name"
                 TEST_FAILED=1
               fi
