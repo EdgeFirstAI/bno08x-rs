@@ -401,15 +401,82 @@ jobs:
         with:
           pattern: coverage-*
           path: coverage/
-          merge-multiple: true
 
-      - name: List coverage files
+      - name: Organize coverage files for SonarCloud
         run: |
-          echo "Coverage files:"
-          find coverage/ -name "*.xml" -type f
+          echo "=== Downloaded coverage artifacts ==="
+          find coverage/ -type f
+          echo ""
+          
+          # Collect all coverage reports
+          COVERAGE_REPORTS=$(find coverage/ -name "*.xml" -o -name "*.lcov" | tr '\n' ',' | sed 's/,$//')
+          
+          echo "=== Coverage report paths ==="
+          echo "Coverage reports: $COVERAGE_REPORTS"
+          
+          # Show sample coverage report
+          SAMPLE_REPORT=$(find coverage/ -name "*.xml" -o -name "*.lcov" | head -1)
+          if [ -n "$SAMPLE_REPORT" ] && [ -f "$SAMPLE_REPORT" ]; then
+            echo ""
+            echo "=== Sample coverage report (first 20 lines) ==="
+            head -20 "$SAMPLE_REPORT"
+          fi
+          
+          # Export for SonarCloud
+          echo "COVERAGE_PATHS=$COVERAGE_REPORTS" >> $GITHUB_ENV
 
       - name: SonarCloud Scan
         uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602  # v6.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.rust.lcov.reportPaths=${{ env.COVERAGE_PATHS }}
+
+      - name: Generate test and coverage summary
+        if: always()
+        run: |
+          echo "# 📊 BNO08x Test & Coverage Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Test platforms summary
+          echo "## 🧪 Test Platforms" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | Architecture | Environment | Tests |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------------|-------------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Ubuntu 22.04 | x86_64 | GitHub Runner | Unit tests, doc tests |" >> $GITHUB_STEP_SUMMARY
+          echo "| Ubuntu 22.04 ARM | aarch64 | GitHub ARM Runner | Unit tests, doc tests |" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ needs.hardware-test.result }}" != "skipped" ]; then
+            echo "| Raivin | aarch64 | Real Hardware | Integration tests with BNO08x IMU |" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Coverage summary
+          echo "## 📈 Coverage Reports" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Parse coverage from Cobertura XML if available
+          for coverage_file in $(find coverage/ -name "coverage-*.xml" 2>/dev/null); do
+            platform=$(basename "$coverage_file" | sed 's/coverage-//' | sed 's/.xml//')
+            if [ -f "$coverage_file" ]; then
+              # Extract line coverage from Cobertura XML
+              line_rate=$(grep -oP 'line-rate="\K[^"]+' "$coverage_file" | head -1)
+              if [ -n "$line_rate" ]; then
+                percentage=$(awk "BEGIN {printf \"%.1f\", $line_rate * 100}")
+                echo "- **$platform**: ${percentage}% line coverage" >> $GITHUB_STEP_SUMMARY
+              fi
+            fi
+          done
+          
+          # Hardware coverage if available
+          if [ -f "coverage/coverage-hardware-processed/coverage-hardware.lcov" ]; then
+            echo "- **Hardware tests**: Coverage collected (LCOV format)" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 🔗 SonarCloud Dashboard" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- [📊 Overall Code](https://sonarcloud.io/summary/overall?id=EdgeFirstAI_bno08x-rs&branch=${{ github.ref_name }})" >> $GITHUB_STEP_SUMMARY
+          echo "- [📁 Coverage by File](https://sonarcloud.io/component_measures?id=EdgeFirstAI_bno08x-rs&metric=coverage&view=list&branch=${{ github.ref_name }})" >> $GITHUB_STEP_SUMMARY
+
