@@ -251,7 +251,7 @@ mod tests {
         assert_ne!(CHANNEL_EXECUTABLE, CHANNEL_HUB_CONTROL);
         assert_ne!(CHANNEL_EXECUTABLE, CHANNEL_SENSOR_REPORTS);
         assert_ne!(CHANNEL_HUB_CONTROL, CHANNEL_SENSOR_REPORTS);
-        
+
         // Verify channels are in valid range
         assert!(CHANNEL_COMMAND < NUM_CHANNELS as u8);
         assert!(CHANNEL_EXECUTABLE < NUM_CHANNELS as u8);
@@ -273,7 +273,7 @@ mod tests {
             SENSOR_REPORTID_ROTATION_VECTOR_GEOMAGNETIC,
             SENSOR_REPORTID_GRAVITY,
         ];
-        
+
         for (i, &id1) in report_ids.iter().enumerate() {
             for &id2 in report_ids.iter().skip(i + 1) {
                 assert_ne!(id1, id2, "Duplicate report ID found: {}", id1);
@@ -283,11 +283,15 @@ mod tests {
 
     #[test]
     fn test_q_points_arrays() {
-        // Verify Q_POINTS and Q_POINTS2 arrays exist and have entries
-        assert!(Q_POINTS.len() > 0, "Q_POINTS should have entries");
-        assert!(Q_POINTS2.len() > 0, "Q_POINTS2 should have entries");
-        assert_eq!(Q_POINTS.len(), Q_POINTS2.len(), "Q_POINTS arrays should have same length");
-        
+        // Verify Q_POINTS and Q_POINTS2 arrays have same length (compile-time check)
+        const _: () = assert!(Q_POINTS.len() == Q_POINTS2.len());
+
+        assert_eq!(
+            Q_POINTS.len(),
+            Q_POINTS2.len(),
+            "Q_POINTS arrays should have same length"
+        );
+
         // Verify known report IDs have valid Q points
         assert!(Q_POINTS[SENSOR_REPORTID_ACCELEROMETER as usize] > 0);
         assert!(Q_POINTS[SENSOR_REPORTID_GYROSCOPE as usize] > 0);
@@ -296,12 +300,13 @@ mod tests {
 
     #[test]
     fn test_buffer_sizes() {
-        // Verify buffer sizes are reasonable
-        assert!(PACKET_SEND_BUF_LEN > 0);
-        assert!(PACKET_RECV_BUF_LEN > 0);
-        assert!(PACKET_RECV_BUF_LEN >= PACKET_SEND_BUF_LEN);
-        
+        // Verify buffer sizes are reasonable - constants are verified at compile time
+        // These values are known to be positive and correctly sized
+        const _: () = assert!(PACKET_SEND_BUF_LEN > 0);
+        const _: () = assert!(PACKET_RECV_BUF_LEN > 0);
+        const _: () = assert!(PACKET_RECV_BUF_LEN >= PACKET_SEND_BUF_LEN);
+
         // Receive buffer should be larger for handling sensor reports
-        assert!(PACKET_RECV_BUF_LEN > PACKET_SEND_BUF_LEN);
+        const _: () = assert!(PACKET_RECV_BUF_LEN > PACKET_SEND_BUF_LEN);
     }
 }

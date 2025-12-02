@@ -354,7 +354,7 @@ mod tests {
     #[test]
     fn test_read_i16() {
         // Little-endian: 0x34, 0x12 -> 0x1234 as i16 = 4660
-        let data = [0x34, 0x12, 0xFF, 0xFF]; 
+        let data = [0x34, 0x12, 0xFF, 0xFF];
         let mut pos = 0;
         assert_eq!(ReportParser::read_i16(&data, &mut pos), 0x1234u16 as i16);
         assert_eq!(pos, 2);
@@ -367,9 +367,12 @@ mod tests {
     fn test_try_read_i16() {
         let data = [0x34, 0x12];
         let mut pos = 0;
-        assert_eq!(ReportParser::try_read_i16(&data, &mut pos), Some(0x1234u16 as i16));
+        assert_eq!(
+            ReportParser::try_read_i16(&data, &mut pos),
+            Some(0x1234u16 as i16)
+        );
         assert_eq!(pos, 2);
-        
+
         // Not enough data
         assert_eq!(ReportParser::try_read_i16(&data, &mut pos), None);
         assert_eq!(pos, 2); // pos unchanged on failure
@@ -389,10 +392,10 @@ mod tests {
             0x00, 0x04, // data4 (0x0400 = 1024)
             0x00, 0x05, // data5 (0x0500 = 1280)
         ];
-        
+
         let (pos, report_id, data1, data2, data3, data4, data5) =
             ReportParser::parse_input_report(0, &msg);
-        
+
         assert_eq!(report_id, 0x01);
         assert_eq!(data1, 256);
         assert_eq!(data2, 512);
@@ -414,10 +417,10 @@ mod tests {
             0x00, 0x02, // data2
             0x00, 0x03, // data3
         ];
-        
+
         let (pos, report_id, data1, data2, data3, data4, data5) =
             ReportParser::parse_input_report(0, &msg);
-        
+
         assert_eq!(report_id, 0x01);
         assert_eq!(data1, 256);
         assert_eq!(data2, 512);
