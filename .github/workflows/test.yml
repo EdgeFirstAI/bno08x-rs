@@ -138,6 +138,23 @@ jobs:
         run: |
           cargo llvm-cov --lib --workspace --cobertura --output-path coverage.xml
 
+      - name: Build instrumented integration test binaries for hardware testing (aarch64 only)
+        if: matrix.platform.name == 'aarch64'
+        run: |
+          # Set up coverage environment for building instrumented test binaries
+          source <(cargo llvm-cov show-env --export-prefix)
+
+          # Build test binaries with coverage instrumentation
+          cargo test --test '*' --no-run
+
+          # Copy instrumented test binaries to target/tests for artifact upload
+          mkdir -p target/tests
+          find target/llvm-cov-target/debug/deps/ -maxdepth 1 -type f -executable \
+            \( -name "bno08x*" -o -name "*integration*" \) -exec cp {} target/tests/ \;
+
+          echo "Instrumented test binaries:"
+          ls -la target/tests/
+
       - name: Upload coverage artifact
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
         with:
@@ -145,11 +162,108 @@ jobs:
           path: coverage.xml
           retention-days: 30
 
+      - name: Upload integration test binaries for hardware testing (aarch64 only)
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
+        if: matrix.platform.name == 'aarch64'
+        with:
+          name: integration-tests-aarch64
+          path: |
+            target/tests/
+          retention-days: 7
+
+      - name: Upload Rust instrumented objects for coverage processing (aarch64 only)
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
+        if: matrix.platform.name == 'aarch64'
+        with:
+          name: rust-llvm-cov-aarch64
+          path: |
+            target/llvm-cov-target/
+          retention-days: 7
+
   hardware-test:
     name: Hardware Integration Tests
+    needs: test
     runs-on: raivin
     # Only run on main branch or when explicitly requested via label
     if: github.ref == 'refs/heads/main' || contains(github.event.pull_request.labels.*.name, 'test-hardware')
+
+    steps:
+      - name: Clean workspace (self-hosted runner)
+        run: |
+          # Self-hosted runners persist state between runs
+          rm -rf target/ integration-tests/ coverage/ 2>/dev/null || true
+          find . -name "*.profraw" -delete 2>/dev/null || true
+
+      - name: Checkout code
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+
+      - name: Download aarch64 integration test binaries
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53  # v6.0.0
+        with:
+          name: integration-tests-aarch64
+          path: integration-tests/
+
+      - name: Make downloaded binaries executable
+        run: |
+          # Artifact upload/download doesn't preserve execute permissions
+          chmod +x integration-tests/* 2>/dev/null || true
+          echo "Integration test binaries:"
+          ls -la integration-tests/
+
+      - name: Run pre-built integration tests with hardware access
+        run: |
+          set -o pipefail
+          mkdir -p coverage/profraw
+          
+          # Set up profraw collection directory
+          export LLVM_PROFILE_FILE="${{ github.workspace }}/coverage/profraw/raivin-%p-%m.profraw"
+
+          # Track overall test status
+          TEST_FAILED=0
+          
+          # Run each test binary
+          echo "Running pre-built integration test binaries..."
+          for test_bin in integration-tests/*; do
+            if [ -x "$test_bin" ] && [ -f "$test_bin" ]; then
+              test_name=$(basename "$test_bin")
+              echo "=== Running $test_name ==="
+              # --test-threads=1 for deterministic execution on hardware
+              if ! "$test_bin" --test-threads=1 2>&1 | tee "coverage/${test_name}.txt"; then
+                echo "FAILED: $test_name"
+                TEST_FAILED=1
+              fi
+            fi
+          done
+          
+          echo ""
+          echo "=== Profraw files generated ==="
+          ls -la coverage/profraw/ || echo "No profraw files generated"
+          
+          # Fail the step if any test failed
+          if [ $TEST_FAILED -ne 0 ]; then
+            echo ""
+            echo "ERROR: One or more integration tests failed!"
+            exit 1
+          fi
+
+      - name: Upload hardware coverage artifact
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
+        if: always()
+        with:
+          name: coverage-hardware
+          path: |
+            coverage/profraw/
+            coverage/*.txt
+          retention-days: 30
+
+  process-hardware-coverage:
+    name: Process Hardware Coverage
+    needs: [test, hardware-test]
+    runs-on: ubuntu-22.04-arm
+    # Only run if hardware-test ran
+    if: needs.hardware-test.result == 'success' || needs.hardware-test.result == 'failure'
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout code
@@ -161,31 +275,120 @@ jobs:
           toolchain: stable
           components: llvm-tools-preview
 
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@92e6dd1c202153a204d471a3c509bf1e03dcfa44  # v2.62.61
+      - name: Download Rust instrumented objects (for coverage processing)
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53  # v6.0.0
         with:
-          tool: cargo-llvm-cov
+          name: rust-llvm-cov-aarch64
+          path: target/llvm-cov-target/
 
-      - name: Run integration tests
-        run: |
-          cargo test --test '*' -- --test-threads=1
-
-      - name: Generate hardware test coverage
-        run: |
-          cargo llvm-cov --test '*' --cobertura --output-path coverage-hardware.xml -- --test-threads=1
-
-      - name: Upload hardware coverage artifact
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
+      - name: Download hardware coverage artifacts (contains profraw files)
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53  # v6.0.0
         with:
           name: coverage-hardware
-          path: coverage-hardware.xml
+          path: coverage-hardware/
+
+      - name: Process profraw files into coverage report
+        run: |
+          echo "=== Downloaded llvm-cov-target directory ==="
+          ls -la target/llvm-cov-target/ || echo "Directory not found"
+          
+          echo ""
+          echo "=== Profraw files from hardware ==="
+          find coverage-hardware/ -name "*.profraw" -type f || echo "No profraw files found"
+          
+          PROFRAW_COUNT=$(find coverage-hardware/ -name "*.profraw" | wc -l)
+          echo "Found $PROFRAW_COUNT profraw files"
+          
+          if [ "$PROFRAW_COUNT" -eq 0 ]; then
+            echo "WARNING: No profraw files found from hardware tests - skipping coverage"
+            exit 0
+          fi
+          
+          # Find LLVM tools from Rust toolchain
+          TOOLCHAIN_ROOT=$(rustc --print sysroot)
+          LLVM_PROFDATA=$(find "$TOOLCHAIN_ROOT" -name "llvm-profdata" -type f | head -1)
+          LLVM_COV=$(find "$TOOLCHAIN_ROOT" -name "llvm-cov" -type f | head -1)
+          
+          if [ -z "$LLVM_PROFDATA" ] || [ -z "$LLVM_COV" ]; then
+            echo "ERROR: Could not find LLVM tools in Rust toolchain"
+            exit 1
+          fi
+          
+          echo ""
+          echo "Using LLVM tools:"
+          echo "  llvm-profdata: $LLVM_PROFDATA"
+          echo "  llvm-cov: $LLVM_COV"
+          
+          # Merge profraw files into profdata
+          echo ""
+          echo "=== Merging profraw files ==="
+          mkdir -p coverage
+          "$LLVM_PROFDATA" merge -sparse \
+            $(find coverage-hardware/ -name "*.profraw" -type f) \
+            -o coverage/hardware.profdata
+          
+          if [ ! -f coverage/hardware.profdata ]; then
+            echo "ERROR: Failed to merge profraw files"
+            exit 1
+          fi
+          echo "Created coverage/hardware.profdata"
+          
+          # Find all instrumented binaries
+          echo ""
+          echo "=== Finding instrumented binaries ==="
+          OBJECT_FILES=""
+          for obj in $(find target/llvm-cov-target/debug/deps -maxdepth 1 -type f ! -name "*.d" ! -name "*.rlib" ! -name "*.rmeta" 2>/dev/null); do
+            if file "$obj" | grep -q "ELF"; then
+              if [ -z "$OBJECT_FILES" ]; then
+                OBJECT_FILES="$obj"
+              else
+                OBJECT_FILES="$OBJECT_FILES --object=$obj"
+              fi
+            fi
+          done
+
+          if [ -z "$OBJECT_FILES" ]; then
+            echo "ERROR: No ELF binaries found in target/llvm-cov-target/debug/deps/"
+            exit 1
+          fi
+          
+          echo "Found binaries for coverage analysis"
+          
+          # Generate coverage report
+          echo ""
+          echo "=== Generating coverage report ==="
+          "$LLVM_COV" export \
+            --format=lcov \
+            --instr-profile=coverage/hardware.profdata \
+            --ignore-filename-regex='/.cargo/registry|/rustc/' \
+            $OBJECT_FILES \
+            > coverage/coverage-hardware.lcov
+          
+          if [ ! -s coverage/coverage-hardware.lcov ]; then
+            echo "ERROR: Failed to generate coverage report (empty file)"
+            exit 1
+          fi
+          
+          echo "Generated coverage/coverage-hardware.lcov"
+          wc -l coverage/coverage-hardware.lcov
+
+      - name: Upload processed hardware coverage
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
+        with:
+          name: coverage-hardware-processed
+          path: |
+            coverage/coverage-hardware.lcov
           retention-days: 30
 
   sonarcloud:
     name: SonarCloud Analysis
     runs-on: ubuntu-22.04
-    needs: [test]
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: [test, hardware-test, process-hardware-coverage]
+    # Run if test succeeded, even if hardware tests were skipped
+    if: |
+      always() && 
+      needs.test.result == 'success' &&
+      (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
 
     steps:
       - name: Checkout code
