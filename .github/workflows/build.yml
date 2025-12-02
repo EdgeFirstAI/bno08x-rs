@@ -3,9 +3,9 @@
 # This workflow builds the library and binaries for multiple platforms.
 #
 # Action Versions (hash-pinned per SPS v2.1):
-# - actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 (v4.2.2)
-# - dtolnay/rust-toolchain@7b1c307e0dcbda6122208f10795a713336a9b35a (stable)
-# - actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a (v4.1.2)
+# - actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 (v6.0.0)
+# - dtolnay/rust-toolchain@0b1efabc08b657293548b77fb76cc02d26091c7e (master)
+# - actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 (v4.3.0)
 #
 # Runner Notes:
 # - ubuntu-22.04: Standard GitHub-hosted runner (x86_64)
@@ -42,23 +42,23 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@7b1c307e0dcbda6122208f10795a713336a9b35a  # stable
+        uses: dtolnay/rust-toolchain@0b1efabc08b657293548b77fb76cc02d26091c7e  # master
         with:
           toolchain: stable
           targets: ${{ matrix.platform.target }}
 
       - name: Cache cargo registry
-        uses: actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a  # v4.1.2
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: ~/.cargo/registry/index
           key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-index-
 
       - name: Cache cargo build
-        uses: actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a  # v4.1.2
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: target
           key: ${{ runner.os }}-${{ matrix.platform.name }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
