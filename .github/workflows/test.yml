@@ -112,7 +112,7 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@92e6dd1c202153a204d471a3c509bf1e03dcfa44  # v2.62.61
         with:
-          tool: cargo-llvm-cov
+          tool: cargo-llvm-cov,cargo-nextest
 
       - name: Cache cargo registry
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
@@ -128,15 +128,23 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.platform.name }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-${{ matrix.platform.name }}-cargo-test-
 
-      - name: Run unit tests
-        run: cargo test --lib --workspace
-
-      - name: Run doc tests
-        run: cargo test --doc --workspace
+      - name: Run unit and doc tests with nextest
+        run: |
+          # Run tests with JUnit XML output
+          cargo nextest run --lib --workspace --profile ci --no-fail-fast
+          cargo test --doc --workspace --no-fail-fast
 
       - name: Generate coverage
         run: |
           cargo llvm-cov --lib --workspace --cobertura --output-path coverage.xml
+
+      - name: Upload test results
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
+        if: always()
+        with:
+          name: test-results-${{ matrix.platform.name }}
+          path: target/nextest/ci/junit.xml
+          retention-days: 30
 
       - name: Build instrumented integration test binaries for hardware testing (aarch64 only)
         if: matrix.platform.name == 'aarch64'
@@ -402,6 +410,12 @@ jobs:
           pattern: coverage-*
           path: coverage/
 
+      - name: Download test results
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53  # v6.0.0
+        with:
+          pattern: test-results-*
+          path: test-results/
+
       - name: Organize coverage files for SonarCloud
         run: |
           echo "=== Downloaded coverage artifacts ==="
@@ -440,43 +454,110 @@ jobs:
           echo "# 📊 BNO08x Test & Coverage Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          # Test platforms summary
-          echo "## 🧪 Test Platforms" >> $GITHUB_STEP_SUMMARY
+          # Test Results Summary
+          echo "## 🧪 Test Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Platform | Architecture | Environment | Tests |" >> $GITHUB_STEP_SUMMARY
-          echo "|----------|--------------|-------------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Ubuntu 22.04 | x86_64 | GitHub Runner | Unit tests, doc tests |" >> $GITHUB_STEP_SUMMARY
-          echo "| Ubuntu 22.04 ARM | aarch64 | GitHub ARM Runner | Unit tests, doc tests |" >> $GITHUB_STEP_SUMMARY
+          
+          # Parse JUnit XML files
+          TOTAL_TESTS=0
+          TOTAL_PASSED=0
+          TOTAL_FAILED=0
+          TOTAL_SKIPPED=0
+          
+          for junit_file in $(find test-results/ -name "junit.xml" 2>/dev/null); do
+            if [ -f "$junit_file" ]; then
+              platform=$(dirname "$junit_file" | xargs basename | sed 's/test-results-//')
+              
+              # Parse test counts from JUnit XML
+              tests=$(grep -oP 'tests="\K[^"]+' "$junit_file" | head -1)
+              failures=$(grep -oP 'failures="\K[^"]+' "$junit_file" | head -1)
+              skipped=$(grep -oP 'skipped="\K[^"]+' "$junit_file" | head -1)
+              
+              tests=${tests:-0}
+              failures=${failures:-0}
+              skipped=${skipped:-0}
+              passed=$((tests - failures - skipped))
+              
+              TOTAL_TESTS=$((TOTAL_TESTS + tests))
+              TOTAL_PASSED=$((TOTAL_PASSED + passed))
+              TOTAL_FAILED=$((TOTAL_FAILED + failures))
+              TOTAL_SKIPPED=$((TOTAL_SKIPPED + skipped))
+              
+              # Status emoji
+              if [ $failures -gt 0 ]; then
+                status="❌"
+              elif [ $passed -gt 0 ]; then
+                status="✅"
+              else
+                status="⚪"
+              fi
+              
+              echo "**$platform**: $status $passed passed, $failures failed, $skipped skipped (total: $tests)" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Overall**: $TOTAL_PASSED passed, $TOTAL_FAILED failed, $TOTAL_SKIPPED skipped (total: $TOTAL_TESTS tests)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Test Platforms
+          echo "## 🔧 Test Platforms" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | Architecture | Environment | Test Types |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------------|-------------|------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Ubuntu 22.04 | x86_64 | GitHub Runner | Unit tests (offline), doc tests |" >> $GITHUB_STEP_SUMMARY
+          echo "| Ubuntu 22.04 ARM | aarch64 | GitHub ARM Runner | Unit tests (offline), doc tests |" >> $GITHUB_STEP_SUMMARY
           if [ "${{ needs.hardware-test.result }}" != "skipped" ]; then
-            echo "| Raivin | aarch64 | Real Hardware | Integration tests with BNO08x IMU |" >> $GITHUB_STEP_SUMMARY
+            echo "| Raivin | aarch64 | Real Hardware | Integration tests (online) with BNO08x IMU |" >> $GITHUB_STEP_SUMMARY
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          # Coverage summary
-          echo "## 📈 Coverage Reports" >> $GITHUB_STEP_SUMMARY
+          # Coverage Summary
+          echo "## 📈 Coverage Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          # Parse coverage from Cobertura XML if available
-          for coverage_file in $(find coverage/ -name "coverage-*.xml" 2>/dev/null); do
-            platform=$(basename "$coverage_file" | sed 's/coverage-//' | sed 's/.xml//')
+          # Parse coverage from Cobertura XML
+          for coverage_file in $(find coverage/ -name "*.xml" 2>/dev/null | sort); do
             if [ -f "$coverage_file" ]; then
-              # Extract line coverage from Cobertura XML
-              line_rate=$(grep -oP 'line-rate="\K[^"]+' "$coverage_file" | head -1)
+              platform=$(basename "$(dirname "$coverage_file")" | sed 's/coverage-//')
+              
+              # Extract coverage metrics from Cobertura XML
+              line_rate=$(grep -oP '<coverage[^>]+line-rate="\K[^"]+' "$coverage_file" | head -1)
+              branch_rate=$(grep -oP '<coverage[^>]+branch-rate="\K[^"]+' "$coverage_file" | head -1)
+              lines_covered=$(grep -oP '<coverage[^>]+lines-covered="\K[^"]+' "$coverage_file" | head -1)
+              lines_valid=$(grep -oP '<coverage[^>]+lines-valid="\K[^"]+' "$coverage_file" | head -1)
+              
               if [ -n "$line_rate" ]; then
-                percentage=$(awk "BEGIN {printf \"%.1f\", $line_rate * 100}")
-                echo "- **$platform**: ${percentage}% line coverage" >> $GITHUB_STEP_SUMMARY
+                line_pct=$(awk "BEGIN {printf \"%.1f\", $line_rate * 100}")
+                branch_pct=$(awk "BEGIN {printf \"%.1f\", $branch_rate * 100}")
+                
+                echo "**$platform**:" >> $GITHUB_STEP_SUMMARY
+                echo "- Line coverage: ${line_pct}% (${lines_covered}/${lines_valid} lines)" >> $GITHUB_STEP_SUMMARY
+                echo "- Branch coverage: ${branch_pct}%" >> $GITHUB_STEP_SUMMARY
+                echo "" >> $GITHUB_STEP_SUMMARY
               fi
             fi
           done
           
           # Hardware coverage if available
-          if [ -f "coverage/coverage-hardware-processed/coverage-hardware.lcov" ]; then
-            echo "- **Hardware tests**: Coverage collected (LCOV format)" >> $GITHUB_STEP_SUMMARY
+          if [ -d "coverage/coverage-hardware-processed" ]; then
+            hw_lcov=$(find coverage/coverage-hardware-processed -name "*.lcov" 2>/dev/null | head -1)
+            if [ -f "$hw_lcov" ]; then
+              # Parse LCOV for coverage stats
+              lines_found=$(grep -c "^DA:" "$hw_lcov" 2>/dev/null || echo 0)
+              lines_hit=$(grep "^DA:" "$hw_lcov" | grep -v ",0$" | wc -l 2>/dev/null || echo 0)
+              if [ $lines_found -gt 0 ]; then
+                hw_pct=$(awk "BEGIN {printf \"%.1f\", ($lines_hit / $lines_found) * 100}")
+                echo "**Hardware (raivin)**:" >> $GITHUB_STEP_SUMMARY
+                echo "- Line coverage: ${hw_pct}% (${lines_hit}/${lines_found} lines)" >> $GITHUB_STEP_SUMMARY
+                echo "" >> $GITHUB_STEP_SUMMARY
+              fi
+            fi
           fi
           
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## 🔗 SonarCloud Dashboard" >> $GITHUB_STEP_SUMMARY
+          echo "## 🔗 External Reports" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- [📊 Overall Code](https://sonarcloud.io/summary/overall?id=EdgeFirstAI_bno08x-rs&branch=${{ github.ref_name }})" >> $GITHUB_STEP_SUMMARY
+          echo "- [📊 SonarCloud Dashboard](https://sonarcloud.io/summary/overall?id=EdgeFirstAI_bno08x-rs&branch=${{ github.ref_name }})" >> $GITHUB_STEP_SUMMARY
           echo "- [📁 Coverage by File](https://sonarcloud.io/component_measures?id=EdgeFirstAI_bno08x-rs&metric=coverage&view=list&branch=${{ github.ref_name }})" >> $GITHUB_STEP_SUMMARY
 
