@@ -267,3 +267,171 @@ impl ReportParser {
         (pos, report_id, data1, data2, data3, data4, data5)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sensor_data_new() {
+        let data = SensorData::new();
+        assert_eq!(data.accelerometer, [0.0, 0.0, 0.0]);
+        assert_eq!(data.rotation_quaternion, [0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(data.gyro, [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn test_update_accelerometer() {
+        let mut data = SensorData::new();
+        // Q8 format: 256 = 1.0
+        data.update_accelerometer(256, 512, -256);
+        assert!((data.accelerometer[0] - 1.0).abs() < 0.01);
+        assert!((data.accelerometer[1] - 2.0).abs() < 0.01);
+        assert!((data.accelerometer[2] + 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_update_rotation_quaternion() {
+        let mut data = SensorData::new();
+        // Q14 format: 16384 = 1.0
+        data.update_rotation_quaternion(16384, 0, 0, 0, 0);
+        assert!((data.rotation_quaternion[0] - 1.0).abs() < 0.001);
+        assert!((data.rotation_quaternion[1]).abs() < 0.001);
+        assert!((data.rotation_quaternion[2]).abs() < 0.001);
+        assert!((data.rotation_quaternion[3]).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_update_gyro() {
+        let mut data = SensorData::new();
+        // Q9 format: 512 = 1.0 rad/s
+        data.update_gyro_calib(512, -512, 256);
+        assert!((data.gyro[0] - 1.0).abs() < 0.01);
+        assert!((data.gyro[1] + 1.0).abs() < 0.01);
+        assert!((data.gyro[2] - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_update_linear_accel() {
+        let mut data = SensorData::new();
+        data.update_linear_accel(256, 0, -256);
+        assert!((data.linear_accel[0] - 1.0).abs() < 0.01);
+        assert!((data.linear_accel[1]).abs() < 0.01);
+        assert!((data.linear_accel[2] + 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_update_gravity() {
+        let mut data = SensorData::new();
+        // Gravity is typically ~9.8 m/s² in Z axis
+        let g_z = (9.8 * 256.0) as i16; // Q8 format
+        data.update_gravity(0, 0, g_z);
+        assert!((data.gravity[0]).abs() < 0.01);
+        assert!((data.gravity[1]).abs() < 0.01);
+        assert!((data.gravity[2] - 9.8).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_update_mag_field() {
+        let mut data = SensorData::new();
+        // Q4 format: 16 = 1.0 µT
+        data.update_magnetic_field_calib(160, 320, -160);
+        assert!((data.mag_field[0] - 10.0).abs() < 0.1);
+        assert!((data.mag_field[1] - 20.0).abs() < 0.1);
+        assert!((data.mag_field[2] + 10.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_read_u8() {
+        let data = [0x12, 0x34, 0x56, 0x78];
+        let mut pos = 0;
+        assert_eq!(ReportParser::read_u8(&data, &mut pos), 0x12);
+        assert_eq!(pos, 1);
+        assert_eq!(ReportParser::read_u8(&data, &mut pos), 0x34);
+        assert_eq!(pos, 2);
+    }
+
+    #[test]
+    fn test_read_i16() {
+        // Little-endian: 0x34, 0x12 -> 0x1234 as i16 = 4660
+        let data = [0x34, 0x12, 0xFF, 0xFF]; 
+        let mut pos = 0;
+        assert_eq!(ReportParser::read_i16(&data, &mut pos), 0x1234u16 as i16);
+        assert_eq!(pos, 2);
+        // 0xFF, 0xFF -> -1
+        assert_eq!(ReportParser::read_i16(&data, &mut pos), -1);
+        assert_eq!(pos, 4);
+    }
+
+    #[test]
+    fn test_try_read_i16() {
+        let data = [0x34, 0x12];
+        let mut pos = 0;
+        assert_eq!(ReportParser::try_read_i16(&data, &mut pos), Some(0x1234u16 as i16));
+        assert_eq!(pos, 2);
+        
+        // Not enough data
+        assert_eq!(ReportParser::try_read_i16(&data, &mut pos), None);
+        assert_eq!(pos, 2); // pos unchanged on failure
+    }
+
+    #[test]
+    fn test_parse_input_report() {
+        // Construct a minimal input report
+        let msg = [
+            0x01, // report_id
+            0x02, // seq_num
+            0x03, // status
+            0x04, // delay
+            0x00, 0x01, // data1 (0x0100 = 256)
+            0x00, 0x02, // data2 (0x0200 = 512)
+            0x00, 0x03, // data3 (0x0300 = 768)
+            0x00, 0x04, // data4 (0x0400 = 1024)
+            0x00, 0x05, // data5 (0x0500 = 1280)
+        ];
+        
+        let (pos, report_id, data1, data2, data3, data4, data5) =
+            ReportParser::parse_input_report(0, &msg);
+        
+        assert_eq!(report_id, 0x01);
+        assert_eq!(data1, 256);
+        assert_eq!(data2, 512);
+        assert_eq!(data3, 768);
+        assert_eq!(data4, 1024);
+        assert_eq!(data5, 1280);
+        assert_eq!(pos, msg.len());
+    }
+
+    #[test]
+    fn test_parse_input_report_short() {
+        // Report with only 3 data fields
+        let msg = [
+            0x01, // report_id
+            0x02, // seq_num
+            0x03, // status
+            0x04, // delay
+            0x00, 0x01, // data1
+            0x00, 0x02, // data2
+            0x00, 0x03, // data3
+        ];
+        
+        let (pos, report_id, data1, data2, data3, data4, data5) =
+            ReportParser::parse_input_report(0, &msg);
+        
+        assert_eq!(report_id, 0x01);
+        assert_eq!(data1, 256);
+        assert_eq!(data2, 512);
+        assert_eq!(data3, 768);
+        assert_eq!(data4, 0); // Default when not enough data
+        assert_eq!(data5, 0); // Default when not enough data
+        assert_eq!(pos, msg.len());
+    }
+
+    #[test]
+    fn test_quaternion_normalization() {
+        // Unit quaternion should have magnitude 1.0
+        let q: [f32; 4] = [0.5, 0.5, 0.5, 0.5];
+        let mag_sq: f32 = q[0].powi(2) + q[1].powi(2) + q[2].powi(2) + q[3].powi(2);
+        assert!((mag_sq - 1.0).abs() < 0.01);
+    }
+}

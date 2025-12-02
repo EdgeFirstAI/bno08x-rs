@@ -205,6 +205,10 @@ mod tests {
             f32_to_q(-0.25, 30),
             "Wrong negative q point value"
         );
+        // Test zero
+        assert_eq!([0x00, 0x00, 0x00, 0x00], f32_to_q(0.0, 30));
+        // Test 1.0
+        assert_eq!([0x00, 0x00, 0x00, 0x40], f32_to_q(1.0, 30));
     }
 
     #[test]
@@ -213,5 +217,91 @@ mod tests {
         assert!((q_to_f32(256, 8) - 1.0).abs() < 0.001);
         // Q14: 16384 in Q14 = 1.0
         assert!((q_to_f32(16384, 14) - 1.0).abs() < 0.001);
+        // Test zero
+        assert!((q_to_f32(0, 14)).abs() < 0.001);
+        // Test negative values
+        assert!((q_to_f32(-16384, 14) + 1.0).abs() < 0.001);
+        // Test fractional
+        assert!((q_to_f32(8192, 14) - 0.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_q_point_roundtrip() {
+        // Test that converting f32 -> Q -> f32 preserves value
+        let test_values = [0.0, 0.5, 1.0, -0.5, -1.0, 0.123, -0.456];
+        for &val in &test_values {
+            let q_bytes = f32_to_q(val, 14);
+            let q_val = i16::from_le_bytes([q_bytes[0], q_bytes[1]]);
+            let result = q_to_f32(q_val, 14);
+            assert!(
+                (result - val).abs() < 0.001,
+                "Roundtrip failed for {}: got {}",
+                val,
+                result
+            );
+        }
+    }
+
+    #[test]
+    fn test_channel_constants() {
+        // Verify channel IDs are unique
+        assert_ne!(CHANNEL_COMMAND, CHANNEL_EXECUTABLE);
+        assert_ne!(CHANNEL_COMMAND, CHANNEL_HUB_CONTROL);
+        assert_ne!(CHANNEL_COMMAND, CHANNEL_SENSOR_REPORTS);
+        assert_ne!(CHANNEL_EXECUTABLE, CHANNEL_HUB_CONTROL);
+        assert_ne!(CHANNEL_EXECUTABLE, CHANNEL_SENSOR_REPORTS);
+        assert_ne!(CHANNEL_HUB_CONTROL, CHANNEL_SENSOR_REPORTS);
+        
+        // Verify channels are in valid range
+        assert!(CHANNEL_COMMAND < NUM_CHANNELS as u8);
+        assert!(CHANNEL_EXECUTABLE < NUM_CHANNELS as u8);
+        assert!(CHANNEL_HUB_CONTROL < NUM_CHANNELS as u8);
+        assert!(CHANNEL_SENSOR_REPORTS < NUM_CHANNELS as u8);
+    }
+
+    #[test]
+    fn test_sensor_report_ids() {
+        // Verify report IDs are unique
+        let report_ids = [
+            SENSOR_REPORTID_ACCELEROMETER,
+            SENSOR_REPORTID_GYROSCOPE,
+            SENSOR_REPORTID_GYROSCOPE_UNCALIB,
+            SENSOR_REPORTID_MAGNETIC_FIELD,
+            SENSOR_REPORTID_LINEAR_ACCEL,
+            SENSOR_REPORTID_ROTATION_VECTOR,
+            SENSOR_REPORTID_ROTATION_VECTOR_GAME,
+            SENSOR_REPORTID_ROTATION_VECTOR_GEOMAGNETIC,
+            SENSOR_REPORTID_GRAVITY,
+        ];
+        
+        for (i, &id1) in report_ids.iter().enumerate() {
+            for &id2 in report_ids.iter().skip(i + 1) {
+                assert_ne!(id1, id2, "Duplicate report ID found: {}", id1);
+            }
+        }
+    }
+
+    #[test]
+    fn test_q_points_arrays() {
+        // Verify Q_POINTS and Q_POINTS2 arrays exist and have entries
+        assert!(Q_POINTS.len() > 0, "Q_POINTS should have entries");
+        assert!(Q_POINTS2.len() > 0, "Q_POINTS2 should have entries");
+        assert_eq!(Q_POINTS.len(), Q_POINTS2.len(), "Q_POINTS arrays should have same length");
+        
+        // Verify known report IDs have valid Q points
+        assert!(Q_POINTS[SENSOR_REPORTID_ACCELEROMETER as usize] > 0);
+        assert!(Q_POINTS[SENSOR_REPORTID_GYROSCOPE as usize] > 0);
+        assert!(Q_POINTS[SENSOR_REPORTID_ROTATION_VECTOR as usize] > 0);
+    }
+
+    #[test]
+    fn test_buffer_sizes() {
+        // Verify buffer sizes are reasonable
+        assert!(PACKET_SEND_BUF_LEN > 0);
+        assert!(PACKET_RECV_BUF_LEN > 0);
+        assert!(PACKET_RECV_BUF_LEN >= PACKET_SEND_BUF_LEN);
+        
+        // Receive buffer should be larger for handling sensor reports
+        assert!(PACKET_RECV_BUF_LEN > PACKET_SEND_BUF_LEN);
     }
 }
