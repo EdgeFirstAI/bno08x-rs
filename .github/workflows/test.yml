@@ -145,7 +145,7 @@ jobs:
           source <(cargo llvm-cov show-env --export-prefix)
 
           # Build test binaries with coverage instrumentation
-          cargo test --test '*' --no-run
+          cargo test --no-run
 
           # Copy instrumented test binaries to target/tests for artifact upload
           mkdir -p target/tests
