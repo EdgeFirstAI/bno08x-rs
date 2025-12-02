@@ -54,13 +54,13 @@ build:
 .PHONY: test
 test: build
 	@echo "Running tests with cargo-nextest and llvm-cov..."
-	@if ! command -v cargo-nextest >/dev/null 2>&1; then \
-		echo "ERROR: cargo-nextest not installed"; \
+	@if ! cargo nextest --version >/dev/null 2>&1; then \
+		echo "ERROR: cargo nextest not installed"; \
 		echo "Install with: cargo install cargo-nextest"; \
 		exit 1; \
 	fi
-	@if ! command -v cargo-llvm-cov >/dev/null 2>&1; then \
-		echo "ERROR: cargo-llvm-cov not installed"; \
+	@if ! cargo llvm-cov --version >/dev/null 2>&1; then \
+		echo "ERROR: cargo llvm-cov not installed"; \
 		echo "Install with: cargo install cargo-llvm-cov"; \
 		exit 1; \
 	fi
