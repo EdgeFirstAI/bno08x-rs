@@ -20,17 +20,14 @@ limitations under the License.
 
 This project depends on the following first-level dependencies:
 
-gpiod (0.3.0)
-License: MIT OR Apache-2.0
-Copyright: (c) 2018 The gpiod Developers
-Repository: https://github.com/jspngh/gpiod
+  * gpiod 0.3.0 (MIT OR Apache-2.0)
+    Copyright (c) 2018 The gpiod Developers
+    https://github.com/jspngh/gpiod
 
-log (0.4.25)
-License: MIT OR Apache-2.0
-Copyright: (c) 2014 The Rust Project Developers
-Repository: https://github.com/rust-lang/log
+  * log 0.4.25 (MIT OR Apache-2.0)
+    Copyright (c) 2014 The Rust Project Developers
+    https://github.com/rust-lang/log
 
-spidev (0.6.0)
-License: MIT OR Apache-2.0
-Copyright: (c) 2015 The spidev Developers
-Repository: https://github.com/rust-embedded/rust-spidev
+  * spidev 0.6.0 (MIT OR Apache-2.0)
+    Copyright (c) 2015 The spidev Developers
+    https://github.com/rust-embedded/rust-spidev

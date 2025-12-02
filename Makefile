@@ -1,6 +1,7 @@
 # Rust Project Makefile
 #
 # This Makefile implements SPS v2.1 requirements for Rust projects
+# Reference: ~/Documents/SPS/08-repository-setup.md
 #
 # CUSTOMIZE THESE VARIABLES FOR YOUR PROJECT:
 # ===========================================================================
@@ -14,6 +15,9 @@ RUST_FEATURES ?= --all-features
 # Additional test flags
 TEST_FLAGS ?=
 
+# Virtual environment for SBOM tools
+VENV_ACTIVATE := $(shell if [ -d "venv" ]; then echo "source venv/bin/activate &&"; fi)
+
 # ===========================================================================
 # STANDARD TARGETS
 # ===========================================================================
@@ -23,8 +27,9 @@ help:
 	@echo "Available targets:"
 	@echo "  make format         - Format Rust code with rustfmt"
 	@echo "  make lint           - Run clippy with strict settings"
-	@echo "  make build          - Build with coverage enabled (for testing)"
+	@echo "  make build          - Build the project"
 	@echo "  make test           - Run tests with coverage (nextest + llvm-cov)"
+	@echo "  make sbom           - Generate SBOM and check license policy"
 	@echo "  make verify-version - Verify version consistency"
 	@echo "  make pre-release    - Complete pre-release validation"
 	@echo "  make clean          - Remove build artifacts"
@@ -43,12 +48,12 @@ lint:
 	cargo clippy --all-targets $(RUST_FEATURES) -- -D warnings
 	@echo "✓ Linting complete"
 
-# Build with coverage enabled (for testing)
+# Build
 .PHONY: build
 build:
-	@echo "Building with coverage instrumentation..."
+	@echo "Building..."
 	cargo build $(RUST_FEATURES)
-	@echo "✓ Build complete (coverage-enabled)"
+	@echo "✓ Build complete"
 
 # Run tests with coverage
 .PHONY: test
@@ -73,6 +78,32 @@ test: build
 	@echo "✓ Tests passed with coverage"
 	@echo "Coverage report: target/rust-coverage.lcov"
 
+# Generate SBOM and check licenses
+.PHONY: sbom
+sbom:
+	@echo "Generating SBOM..."
+	@if [ ! -f "venv/bin/scancode" ]; then \
+		echo "ERROR: scancode not found. Please install:"; \
+		echo "  python3 -m venv venv"; \
+		echo "  venv/bin/pip install scancode-toolkit"; \
+		exit 1; \
+	fi
+	@if ! cargo cyclonedx --version >/dev/null 2>&1; then \
+		echo "ERROR: cargo-cyclonedx not installed"; \
+		echo "Install with: cargo install cargo-cyclonedx"; \
+		exit 1; \
+	fi
+	@if [ ! -f ".github/scripts/generate_sbom.sh" ]; then \
+		echo "ERROR: .github/scripts/generate_sbom.sh not found"; \
+		exit 1; \
+	fi
+	@.github/scripts/generate_sbom.sh || true
+	@if [ ! -f "sbom.json" ]; then \
+		echo "ERROR: SBOM generation failed"; \
+		exit 1; \
+	fi
+	@echo "✓ SBOM generated (sbom.json)"
+
 # Verify version consistency
 .PHONY: verify-version
 verify-version:
@@ -94,7 +125,7 @@ verify-version:
 
 # Pre-release checks
 .PHONY: pre-release
-pre-release: format lint verify-version test
+pre-release: format lint verify-version test sbom
 	@echo "=================================================="
 	@echo "✓ All pre-release checks passed"
 	@echo "=================================================="
@@ -114,4 +145,5 @@ clean:
 	@echo "Cleaning build artifacts..."
 	cargo clean
 	rm -rf target/rust-coverage.lcov test-results.xml
+	rm -f sbom.json *-sbom.json *.cdx.json
 	@echo "✓ Clean complete"
