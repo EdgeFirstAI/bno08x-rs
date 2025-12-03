@@ -136,7 +136,7 @@ jobs:
 
       - name: Generate coverage
         run: |
-          cargo llvm-cov --lib --workspace --cobertura --output-path coverage.xml
+          cargo llvm-cov --lib --workspace --lcov --output-path coverage.lcov
 
       - name: Upload test results
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
@@ -168,7 +168,7 @@ jobs:
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
         with:
           name: coverage-${{ matrix.platform.name }}
-          path: coverage.xml
+          path: coverage.lcov
           retention-days: 30
 
       - name: Upload integration test binaries for hardware testing (aarch64 only)
@@ -518,24 +518,20 @@ jobs:
           echo "## 📈 Coverage Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          # Parse coverage from Cobertura XML
-          for coverage_file in $(find coverage/ -name "*.xml" 2>/dev/null | sort); do
+          # Parse coverage from LCOV files
+          for coverage_file in $(find coverage/ -path "*/coverage-*/*.lcov" 2>/dev/null | sort); do
             if [ -f "$coverage_file" ]; then
               platform=$(basename "$(dirname "$coverage_file")" | sed 's/coverage-//')
-              
-              # Extract coverage metrics from Cobertura XML
-              line_rate=$(grep -oP '<coverage[^>]+line-rate="\K[^"]+' "$coverage_file" | head -1)
-              branch_rate=$(grep -oP '<coverage[^>]+branch-rate="\K[^"]+' "$coverage_file" | head -1)
-              lines_covered=$(grep -oP '<coverage[^>]+lines-covered="\K[^"]+' "$coverage_file" | head -1)
-              lines_valid=$(grep -oP '<coverage[^>]+lines-valid="\K[^"]+' "$coverage_file" | head -1)
-              
-              if [ -n "$line_rate" ]; then
-                line_pct=$(awk "BEGIN {printf \"%.1f\", $line_rate * 100}")
-                branch_pct=$(awk "BEGIN {printf \"%.1f\", $branch_rate * 100}")
-                
+
+              # Extract coverage metrics from LCOV
+              lines_found=$(grep -c "^DA:" "$coverage_file" 2>/dev/null || echo 0)
+              lines_hit=$(grep "^DA:" "$coverage_file" | grep -v ",0$" | wc -l 2>/dev/null || echo 0)
+
+              if [ $lines_found -gt 0 ]; then
+                line_pct=$(awk "BEGIN {printf \"%.1f\", ($lines_hit / $lines_found) * 100}")
+
                 echo "**$platform**:" >> $GITHUB_STEP_SUMMARY
-                echo "- Line coverage: ${line_pct}% (${lines_covered}/${lines_valid} lines)" >> $GITHUB_STEP_SUMMARY
-                echo "- Branch coverage: ${branch_pct}%" >> $GITHUB_STEP_SUMMARY
+                echo "- Line coverage: ${line_pct}% (${lines_hit}/${lines_found} lines)" >> $GITHUB_STEP_SUMMARY
                 echo "" >> $GITHUB_STEP_SUMMARY
               fi
             fi
