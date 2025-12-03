@@ -225,16 +225,18 @@ jobs:
           export LLVM_PROFILE_FILE="${{ github.workspace }}/coverage/profraw/raivin-%p-%m.profraw"
 
           # Extract and run tests from nextest archive with profiling profile
+          # --workspace-remap . = map archive workspace to current directory for junit.xml output
           # --profile profiling = use profiling nextest profile (matches archive)
-          # --run-ignored=ignored-only to run only tests marked with #[ignore]
+          # --run-ignored only = run only tests marked with #[ignore]
           # --test-threads=1 for deterministic execution on hardware
           # --no-fail-fast to run all tests even if some fail
           cargo nextest run \
             --archive-file hardware-tests.tar.zst \
+            --workspace-remap . \
             --profile profiling \
             --test-threads=1 \
             --no-fail-fast \
-            --run-ignored=ignored-only
+            --run-ignored only
 
           echo ""
           echo "=== Profraw files generated ==="
