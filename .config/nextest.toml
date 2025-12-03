@@ -36,3 +36,16 @@ junit.path = "junit.xml"
 junit.report-name = "cargo-nextest"
 junit.store-success-output = false
 junit.store-failure-output = true
+
+# Profiling profile for coverage testing with optimized builds
+# Reference: ~/Documents/SPS/11-cicd-pipelines.md
+# Used with: cargo llvm-cov nextest --profile profiling --cargo-profile profiling
+[profile.profiling]
+# Inherit ci settings
+inherits = "ci"
+
+# JUnit XML output for profiling runs
+junit.path = "junit.xml"
+junit.report-name = "cargo-nextest"
+junit.store-success-output = false
+junit.store-failure-output = true

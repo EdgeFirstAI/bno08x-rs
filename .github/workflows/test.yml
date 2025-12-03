@@ -130,39 +130,36 @@ jobs:
 
       - name: Run unit and doc tests with nextest
         run: |
-          # Run tests with JUnit XML output
-          cargo nextest run --lib --workspace --profile ci --no-fail-fast
-          cargo test --doc --workspace --no-fail-fast
+          # Run tests with JUnit XML output using profiling profile (optimized + debug symbols)
+          # --profile profiling = nextest profile, --cargo-profile profiling = cargo profile
+          cargo llvm-cov nextest --lib --workspace --profile profiling --cargo-profile profiling --no-fail-fast
+          cargo test --doc --workspace --profile profiling --no-fail-fast
 
       - name: Generate coverage
         run: |
-          cargo llvm-cov --lib --workspace --lcov --output-path coverage.lcov
+          # Generate coverage from profiling build tests
+          cargo llvm-cov report --lib --workspace --lcov --output-path coverage.lcov
 
       - name: Publish Test Report
         uses: dorny/test-reporter@v2
         if: always()
         with:
           name: Test Results (${{ matrix.platform.name }})
-          path: target/nextest/ci/junit.xml
+          path: target/nextest/profiling/junit.xml
           reporter: java-junit
           fail-on-error: false
 
       - name: Build instrumented test archive for hardware testing (aarch64 only)
         if: matrix.platform.name == 'aarch64'
         run: |
-          # Set up coverage environment for building instrumented test binaries
-          source <(cargo llvm-cov show-env --export-prefix)
-
-          # Build test binaries with coverage instrumentation
-          cargo test --no-run
-
-          # Create nextest archive with only integration tests
-          # This creates a portable archive that can be run on another machine
+          # Build test archive using profiling profile (optimized + debug symbols)
+          # This reuses the already-built instrumented binaries from the test step above
+          # Create nextest archive with profiling build for hardware testing
           cargo nextest archive \
             --archive-file hardware-tests.tar.zst \
             --workspace \
-            --profile ci \
-            --cargo-profile dev
+            --profile profiling \
+            --cargo-profile profiling
 
           echo "Created nextest archive:"
           ls -lh hardware-tests.tar.zst
@@ -230,13 +227,14 @@ jobs:
           mkdir -p coverage/profraw
           export LLVM_PROFILE_FILE="${{ github.workspace }}/coverage/profraw/raivin-%p-%m.profraw"
 
-          # Extract and run tests from nextest archive
+          # Extract and run tests from nextest archive with profiling profile
+          # --profile profiling = use profiling nextest profile (matches archive)
           # --run-ignored=ignored-only to run only tests marked with #[ignore]
           # --test-threads=1 for deterministic execution on hardware
           # --no-fail-fast to run all tests even if some fail
           cargo nextest run \
             --archive-file hardware-tests.tar.zst \
-            --profile ci \
+            --profile profiling \
             --test-threads=1 \
             --no-fail-fast \
             --run-ignored=ignored-only
@@ -250,7 +248,7 @@ jobs:
         if: always()
         with:
           name: Test Results (Hardware - raivin)
-          path: target/nextest/ci/junit.xml
+          path: target/nextest/profiling/junit.xml
           reporter: java-junit
           fail-on-error: false
 
