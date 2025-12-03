@@ -70,7 +70,7 @@ test: build
 		exit 1; \
 	fi
 
-	# Run Rust tests with coverage
+	# Run Rust tests with coverage (unit tests only, not hardware tests)
 	cargo llvm-cov nextest $(RUST_FEATURES) --workspace \
 		--lcov --output-path target/rust-coverage.lcov \
 		$(TEST_FLAGS)
