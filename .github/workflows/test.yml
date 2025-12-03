@@ -128,17 +128,14 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.platform.name }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-${{ matrix.platform.name }}-cargo-test-
 
-      - name: Run unit and doc tests with nextest
+      - name: Run unit and doc tests with coverage
         run: |
-          # Run tests with JUnit XML output using profiling profile (optimized + debug symbols)
+          # Run tests with JUnit XML and LCOV coverage output using profiling profile (optimized + debug symbols)
           # --profile profiling = nextest profile, --cargo-profile profiling = cargo profile
-          cargo llvm-cov nextest --lib --workspace --profile profiling --cargo-profile profiling --no-fail-fast
-          cargo test --doc --workspace --profile profiling --no-fail-fast
+          cargo llvm-cov nextest --lib --workspace --lcov --output-path coverage.lcov --profile profiling --cargo-profile profiling --no-fail-fast
 
-      - name: Generate coverage
-        run: |
-          # Generate coverage from profiling build tests
-          cargo llvm-cov report --lib --workspace --lcov --output-path coverage.lcov
+          # Run doc tests separately (nextest doesn't support doc tests)
+          cargo test --doc --workspace --profile profiling --no-fail-fast
 
       - name: Publish Test Report
         uses: dorny/test-reporter@v2

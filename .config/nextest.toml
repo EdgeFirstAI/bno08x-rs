@@ -23,26 +23,16 @@ junit.report-name = "cargo-nextest"
 junit.store-success-output = false
 junit.store-failure-output = true
 
-[profile.ci]
-# CI-specific configuration
+# Profiling profile for CI coverage testing with optimized builds + debug symbols
+# Reference: ~/Documents/SPS/11-cicd-pipelines.md
+# Used with: cargo llvm-cov nextest --profile profiling --cargo-profile profiling
+[profile.profiling]
+# CI-optimized settings for coverage testing
 test-threads = "num-cpus"
 retries = 0
 failure-output = "immediate-final"
 success-output = "never"
 slow-timeout = { period = "120s", terminate-after = 1 }
-
-# JUnit XML output for CI reporting
-junit.path = "junit.xml"
-junit.report-name = "cargo-nextest"
-junit.store-success-output = false
-junit.store-failure-output = true
-
-# Profiling profile for coverage testing with optimized builds
-# Reference: ~/Documents/SPS/11-cicd-pipelines.md
-# Used with: cargo llvm-cov nextest --profile profiling --cargo-profile profiling
-[profile.profiling]
-# Inherit ci settings
-inherits = "ci"
 
 # JUnit XML output for profiling runs
 junit.path = "junit.xml"
