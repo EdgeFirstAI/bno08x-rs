@@ -138,15 +138,16 @@ jobs:
         run: |
           cargo llvm-cov --lib --workspace --lcov --output-path coverage.lcov
 
-      - name: Upload test results
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
+      - name: Publish Test Report
+        uses: dorny/test-reporter@v2
         if: always()
         with:
-          name: test-results-${{ matrix.platform.name }}
+          name: Test Results (${{ matrix.platform.name }})
           path: target/nextest/ci/junit.xml
-          retention-days: 30
+          reporter: java-junit
+          fail-on-error: false
 
-      - name: Build instrumented integration test binaries for hardware testing (aarch64 only)
+      - name: Build instrumented test archive for hardware testing (aarch64 only)
         if: matrix.platform.name == 'aarch64'
         run: |
           # Set up coverage environment for building instrumented test binaries
@@ -155,14 +156,16 @@ jobs:
           # Build test binaries with coverage instrumentation
           cargo test --no-run
 
-          # Copy only integration test binaries (not lib tests) to target/tests for artifact upload
-          # Integration tests from tests/ directory are named like "hardware_integration-<hash>"
-          mkdir -p target/tests
-          find target/llvm-cov-target/debug/deps/ -maxdepth 1 -type f -executable \
-            -name "*integration*" -exec cp {} target/tests/ \;
+          # Create nextest archive with only integration tests
+          # This creates a portable archive that can be run on another machine
+          cargo nextest archive \
+            --archive-file hardware-tests.tar.zst \
+            --workspace \
+            --profile ci \
+            --cargo-profile dev
 
-          echo "Instrumented test binaries:"
-          ls -la target/tests/
+          echo "Created nextest archive:"
+          ls -lh hardware-tests.tar.zst
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
@@ -171,13 +174,12 @@ jobs:
           path: coverage.lcov
           retention-days: 30
 
-      - name: Upload integration test binaries for hardware testing (aarch64 only)
+      - name: Upload test archive for hardware testing (aarch64 only)
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
         if: matrix.platform.name == 'aarch64'
         with:
-          name: integration-tests-aarch64
-          path: |
-            target/tests/
+          name: hardware-tests-archive
+          path: hardware-tests.tar.zst
           retention-days: 7
 
       - name: Upload Rust instrumented objects for coverage processing (aarch64 only)
@@ -206,55 +208,51 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
 
-      - name: Download aarch64 integration test binaries
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@0b1efabc08b657293548b77fb76cc02d26091c7e  # master
+        with:
+          toolchain: stable
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@92e6dd1c202153a204d471a3c509bf1e03dcfa44  # v2.62.61
+        with:
+          tool: cargo-nextest
+
+      - name: Download test archive
         uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53  # v6.0.0
         with:
-          name: integration-tests-aarch64
-          path: integration-tests/
+          name: hardware-tests-archive
+          path: .
 
-      - name: Make downloaded binaries executable
+      - name: Run hardware integration tests from archive
         run: |
-          # Artifact upload/download doesn't preserve execute permissions
-          chmod +x integration-tests/* 2>/dev/null || true
-          echo "Integration test binaries:"
-          ls -la integration-tests/
-
-      - name: Run pre-built integration tests with hardware access
-        run: |
-          set -o pipefail
+          # Set up profraw collection directory for coverage
           mkdir -p coverage/profraw
-
-          # Set up profraw collection directory
           export LLVM_PROFILE_FILE="${{ github.workspace }}/coverage/profraw/raivin-%p-%m.profraw"
 
-          # Track overall test status
-          TEST_FAILED=0
+          # Extract and run tests from nextest archive
+          # --run-ignored=ignored-only to run only tests marked with #[ignore]
+          # --test-threads=1 for deterministic execution on hardware
+          # --no-fail-fast to run all tests even if some fail
+          cargo nextest run \
+            --archive-file hardware-tests.tar.zst \
+            --profile ci \
+            --test-threads=1 \
+            --no-fail-fast \
+            --run-ignored=ignored-only
 
-          # Run each test binary
-          echo "Running pre-built integration test binaries..."
-          for test_bin in integration-tests/*; do
-            if [ -x "$test_bin" ] && [ -f "$test_bin" ]; then
-              test_name=$(basename "$test_bin")
-              echo "=== Running $test_name ==="
-              # --test-threads=1 for deterministic execution on hardware
-              # --include-ignored to run hardware integration tests marked with #[ignore]
-              if ! "$test_bin" --test-threads=1 --include-ignored 2>&1 | tee "coverage/${test_name}.txt"; then
-                echo "FAILED: $test_name"
-                TEST_FAILED=1
-              fi
-            fi
-          done
-          
           echo ""
           echo "=== Profraw files generated ==="
           ls -la coverage/profraw/ || echo "No profraw files generated"
-          
-          # Fail the step if any test failed
-          if [ $TEST_FAILED -ne 0 ]; then
-            echo ""
-            echo "ERROR: One or more integration tests failed!"
-            exit 1
-          fi
+
+      - name: Publish Hardware Test Report
+        uses: dorny/test-reporter@v2
+        if: always()
+        with:
+          name: Test Results (Hardware - raivin)
+          path: target/nextest/ci/junit.xml
+          reporter: java-junit
+          fail-on-error: false
 
       - name: Upload hardware coverage artifact
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
@@ -263,7 +261,6 @@ jobs:
           name: coverage-hardware
           path: |
             coverage/profraw/
-            coverage/*.txt
           retention-days: 30
 
   process-hardware-coverage:
@@ -412,12 +409,6 @@ jobs:
           pattern: coverage-*
           path: coverage/
 
-      - name: Download test results
-        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53  # v6.0.0
-        with:
-          pattern: test-results-*
-          path: test-results/
-
       - name: Organize coverage files for SonarCloud
         run: |
           echo "=== Downloaded coverage artifacts ==="
@@ -450,58 +441,16 @@ jobs:
           args: >
             -Dsonar.rust.lcov.reportPaths=${{ env.COVERAGE_PATHS }}
 
-      - name: Generate test and coverage summary
+      - name: Generate coverage summary
         if: always()
         run: |
-          echo "# 📊 BNO08x Test & Coverage Summary" >> $GITHUB_STEP_SUMMARY
+          echo "# 📊 BNO08x Coverage Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
-          # Test Results Summary
-          echo "## 🧪 Test Results" >> $GITHUB_STEP_SUMMARY
+
+          # Test results are now displayed by Test Reporter action
+          echo "> Test results are displayed in the \"Test Results\" check runs above" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
-          # Parse JUnit XML files
-          TOTAL_TESTS=0
-          TOTAL_PASSED=0
-          TOTAL_FAILED=0
-          TOTAL_SKIPPED=0
-          
-          for junit_file in $(find test-results/ -name "junit.xml" 2>/dev/null); do
-            if [ -f "$junit_file" ]; then
-              platform=$(dirname "$junit_file" | xargs basename | sed 's/test-results-//')
-              
-              # Parse test counts from JUnit XML
-              tests=$(grep -oP 'tests="\K[^"]+' "$junit_file" | head -1)
-              failures=$(grep -oP 'failures="\K[^"]+' "$junit_file" | head -1)
-              skipped=$(grep -oP 'skipped="\K[^"]+' "$junit_file" | head -1)
-              
-              tests=${tests:-0}
-              failures=${failures:-0}
-              skipped=${skipped:-0}
-              passed=$((tests - failures - skipped))
-              
-              TOTAL_TESTS=$((TOTAL_TESTS + tests))
-              TOTAL_PASSED=$((TOTAL_PASSED + passed))
-              TOTAL_FAILED=$((TOTAL_FAILED + failures))
-              TOTAL_SKIPPED=$((TOTAL_SKIPPED + skipped))
-              
-              # Status emoji
-              if [ $failures -gt 0 ]; then
-                status="❌"
-              elif [ $passed -gt 0 ]; then
-                status="✅"
-              else
-                status="⚪"
-              fi
-              
-              echo "**$platform**: $status $passed passed, $failures failed, $skipped skipped (total: $tests)" >> $GITHUB_STEP_SUMMARY
-            fi
-          done
-          
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Overall**: $TOTAL_PASSED passed, $TOTAL_FAILED failed, $TOTAL_SKIPPED skipped (total: $TOTAL_TESTS tests)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
+
           # Test Platforms
           echo "## 🔧 Test Platforms" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
