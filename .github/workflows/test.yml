@@ -344,7 +344,7 @@ jobs:
           echo ""
           echo "=== Finding instrumented binaries ==="
           OBJECT_FILES=""
-          for obj in $(find target/llvm-cov-target/debug/deps -maxdepth 1 -type f ! -name "*.d" ! -name "*.rlib" ! -name "*.rmeta" 2>/dev/null); do
+          for obj in $(find target/llvm-cov-target/profiling/deps -maxdepth 1 -type f ! -name "*.d" ! -name "*.rlib" ! -name "*.rmeta" 2>/dev/null); do
             if file "$obj" | grep -q "ELF"; then
               if [ -z "$OBJECT_FILES" ]; then
                 OBJECT_FILES="$obj"
@@ -355,7 +355,7 @@ jobs:
           done
 
           if [ -z "$OBJECT_FILES" ]; then
-            echo "ERROR: No ELF binaries found in target/llvm-cov-target/debug/deps/"
+            echo "ERROR: No ELF binaries found in target/llvm-cov-target/profiling/deps/"
             exit 1
           fi
           
