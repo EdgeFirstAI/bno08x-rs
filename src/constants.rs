@@ -6,6 +6,25 @@
 //! This module contains all protocol constants, report IDs, channel
 //! definitions, and Q-point values used for communication with the BNO08x
 //! sensor.
+//!
+//! # Protocol Overview
+//!
+//! The BNO08x uses a layered protocol stack:
+//! - **SHTP** (Sensor Hub Transport Protocol) - Packetized transport layer
+//! - **SHUB** (Sensor Hub) - Application protocol for sensor configuration
+//!
+//! # Q-Point Fixed Point Format
+//!
+//! Sensor values are transmitted as fixed-point integers. The Q-point value
+//! indicates the number of fractional bits. Use [`q_to_f32`] to convert:
+//!
+//! ```
+//! use bno08x_rs::constants::q_to_f32;
+//!
+//! // Q8 format: 256 = 1.0
+//! let value = q_to_f32(256, 8);
+//! assert!((value - 1.0).abs() < 0.01);
+//! ```
 
 /// Buffer sizes
 pub const PACKET_SEND_BUF_LEN: usize = 256;

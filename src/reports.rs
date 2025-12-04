@@ -4,7 +4,36 @@
 //! Sensor report handling for the BNO08x driver.
 //!
 //! This module contains structures and functions for parsing and storing
-//! sensor data received from the BNO08x IMU.
+//! sensor data received from the BNO08x IMU. The main types are:
+//!
+//! - [`SensorData`] - Storage for all sensor values (accelerometer, gyroscope,
+//!   quaternions, etc.)
+//! - [`ReportState`] - Tracks which reports are enabled and manages callbacks
+//! - [`ReportParser`] - Helper functions for parsing binary report data
+//!
+//! # Data Formats
+//!
+//! The BNO08x reports sensor data in Q-point fixed-point format, where values
+//! are scaled by 2^Q. This module handles the conversion to standard floating
+//! point values:
+//!
+//! | Sensor | Q-Point | Range |
+//! |--------|---------|-------|
+//! | Accelerometer | Q8 | ±8g |
+//! | Gyroscope | Q9 | ±2000°/s |
+//! | Magnetometer | Q4 | ±2500µT |
+//! | Rotation Vector | Q14 | Unit quaternion |
+//!
+//! # Example
+//!
+//! ```no_run
+//! use bno08x_rs::SensorData;
+//!
+//! let data = SensorData::new();
+//! // After reading from sensor:
+//! // data.accelerometer contains [x, y, z] in m/s²
+//! // data.rotation_quaternion contains [i, j, k, real] unit quaternion
+//! ```
 
 use std::collections::HashMap;
 
