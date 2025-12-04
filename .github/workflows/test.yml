@@ -4,12 +4,13 @@
 # for the BNO08x driver. Coverage is reported to SonarCloud.
 #
 # Action Versions (hash-pinned per SPS v2.1):
-# - actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 (v6.0.0)
+# - actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 (v6.0.1)
 # - dtolnay/rust-toolchain@0b1efabc08b657293548b77fb76cc02d26091c7e (master)
 # - actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 (v4.3.0)
-# - taiki-e/install-action@92e6dd1c202153a204d471a3c509bf1e03dcfa44 (v2.62.61)
+# - taiki-e/install-action@493d7f216ecab2af0602481ce809ab2c72836fa1 (v2.62.62)
 # - actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 (v5.0.0)
 # - actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 (v6.0.0)
+# - dorny/test-reporter@06b4484c17d304ad4a41a84c844c2ee967535ce2 (v2.3.0)
 # - SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 (v6.0.0)
 #
 # Runner Notes:
@@ -36,7 +37,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
 
       - name: Install Rust nightly
         uses: dtolnay/rust-toolchain@0b1efabc08b657293548b77fb76cc02d26091c7e  # master
@@ -53,7 +54,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@0b1efabc08b657293548b77fb76cc02d26091c7e  # master
@@ -98,7 +99,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
         with:
           fetch-depth: 0  # Full history for better analysis
 
@@ -110,7 +111,7 @@ jobs:
           targets: ${{ matrix.platform.target }}
 
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@92e6dd1c202153a204d471a3c509bf1e03dcfa44  # v2.62.61
+        uses: taiki-e/install-action@493d7f216ecab2af0602481ce809ab2c72836fa1  # v2.62.62
         with:
           tool: cargo-llvm-cov,cargo-nextest
 
@@ -140,7 +141,7 @@ jobs:
           cargo test --doc --workspace --profile profiling --no-fail-fast
 
       - name: Publish Test Report
-        uses: dorny/test-reporter@v2
+        uses: dorny/test-reporter@06b4484c17d304ad4a41a84c844c2ee967535ce2  # v2.3.0
         if: always()
         with:
           name: Test Results (${{ matrix.platform.name }})
@@ -200,7 +201,7 @@ jobs:
           find . -name "*.profraw" -delete 2>/dev/null || true
 
       - name: Checkout code
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@0b1efabc08b657293548b77fb76cc02d26091c7e  # master
@@ -273,7 +274,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@0b1efabc08b657293548b77fb76cc02d26091c7e  # master
@@ -398,7 +399,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
         with:
           fetch-depth: 0  # Full history for better analysis
 

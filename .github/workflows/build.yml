@@ -3,7 +3,7 @@
 # This workflow builds the library and binaries for multiple platforms.
 #
 # Action Versions (hash-pinned per SPS v2.1):
-# - actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 (v6.0.0)
+# - actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 (v6.0.1)
 # - dtolnay/rust-toolchain@0b1efabc08b657293548b77fb76cc02d26091c7e (master)
 # - actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 (v4.3.0)
 #
@@ -42,7 +42,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@0b1efabc08b657293548b77fb76cc02d26091c7e  # master
