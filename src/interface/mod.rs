@@ -1,6 +1,24 @@
 // Copyright 2025 Au-Zone Technologies Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+//! Communication interface abstractions for the BNO08x driver.
+//!
+//! This module provides the [`SensorInterface`] trait that abstracts
+//! communication with the BNO08x sensor, along with a concrete SPI
+//! implementation.
+//!
+//! # Modules
+//!
+//! - [`delay`] - Timing utilities for sensor communication
+//! - [`gpio`] - GPIO abstractions for interrupt and reset pins
+//! - [`spi`] - SPI communication interface
+//! - [`spidev`] - Linux spidev wrapper
+//!
+//! # Example
+//!
+//! Most users should use the high-level [`BNO08x`](crate::BNO08x) constructors
+//! rather than working with interfaces directly.
+
 // pub mod i2c;
 pub mod delay;
 pub mod gpio;
@@ -9,31 +27,43 @@ pub mod spidev;
 
 use core::ops::Shl;
 
-/// A method of communicating with the sensor
+/// Trait for sensor communication interfaces.
+///
+/// This trait abstracts the communication layer for the BNO08x sensor,
+/// allowing the driver to work with different transport mechanisms (SPI, I2C).
+///
+/// The default implementation uses SPI via Linux spidev.
 pub trait SensorInterface {
-    /// Interface error type
+    /// Error type returned by interface operations
     type SensorError;
 
-    /// give the sensor interface a chance to set up
+    /// Initialize the interface hardware.
+    ///
+    /// Called once during driver initialization to set up GPIO pins,
+    /// SPI configuration, etc.
     fn setup(&mut self) -> Result<(), Self::SensorError>;
 
-    /// Write the whole packet provided
+    /// Write a complete SHTP packet to the sensor.
     fn write_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError>;
 
-    /// Read the next packet from the sensor
-    /// Returns the size of the packet read (up to the size of the slice
-    /// provided)
+    /// Read the next available packet from the sensor.
+    ///
+    /// Returns the number of bytes read (up to the buffer size).
     fn read_packet(&mut self, recv_buf: &mut [u8]) -> Result<usize, Self::SensorError>;
 
-    /// Wait for sensor to indicate it has data available before reading
-    /// - `max_ms` maximum number of milliseconds to wait for data
+    /// Wait for sensor data and read when available.
+    ///
+    /// # Arguments
+    ///
+    /// * `recv_buf` - Buffer to store the received packet
+    /// * `max_ms` - Maximum time to wait for data (milliseconds)
     fn read_with_timeout(
         &mut self,
         recv_buf: &mut [u8],
         max_ms: usize,
     ) -> Result<usize, Self::SensorError>;
 
-    /// Send a packet and receive the response immediately
+    /// Send a packet and immediately read the response.
     fn send_and_receive_packet(
         &mut self,
         send_buf: &[u8],
@@ -122,5 +152,10 @@ mod tests {
         raw_packet = [19_u8, 129_u8, 0, 1];
         let size = SensorCommon::parse_packet_header(&raw_packet);
         assert_eq!(size, 275, "verify > 255 packet length");
+
+        // Test garbage packet [0xFF, 0xFF, ...] returns 0
+        let garbage_packet: [u8; PACKET_HEADER_LENGTH] = [0xFF, 0xFF, 0xFF, 0xFF];
+        let size = SensorCommon::parse_packet_header(&garbage_packet);
+        assert_eq!(size, 0, "garbage packet should return zero length");
     }
 }

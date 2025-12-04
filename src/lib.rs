@@ -1,42 +1,78 @@
 // Copyright 2025 Au-Zone Technologies Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-//! BNO08x IMU Driver
+//! # BNO08x IMU Driver
 //!
-//! A Rust userspace driver for the BNO08x family of IMU sensors.
+//! A Rust userspace driver for the BNO08x family of 9-axis IMU sensors
+//! from Bosch/Hillcrest Labs.
 //!
-//! # Overview
+//! ## Overview
 //!
-//! This crate provides a driver for communicating with Bosch/Hillcrest Labs
-//! BNO08x IMU sensors over SPI. The driver handles the SHTP protocol and
-//! provides high-level access to sensor data including:
+//! The BNO08x is a System-in-Package (SiP) that integrates:
+//! - Triaxial 14-bit accelerometer
+//! - Triaxial 16-bit gyroscope  
+//! - Triaxial geomagnetic sensor
+//! - 32-bit microcontroller running sensor fusion firmware
 //!
-//! - Accelerometer
-//! - Gyroscope (calibrated and uncalibrated)
-//! - Magnetometer
-//! - Rotation vectors (absolute, game, and geomagnetic)
-//! - Linear acceleration (gravity removed)
-//! - Gravity vector
+//! This crate provides a safe Rust interface for communicating with the
+//! sensor over SPI, handling the SHTP (Sensor Hub Transport Protocol) and
+//! providing high-level access to fused and raw sensor data.
 //!
-//! # Example
+//! ## Features
+//!
+//! - **Sensor Fusion**: Rotation vectors (absolute, game, geomagnetic)
+//! - **Raw Sensors**: Accelerometer, gyroscope, magnetometer
+//! - **Derived Data**: Linear acceleration, gravity vector
+//! - **Configurable Rates**: 1 Hz to 1 kHz update rates
+//! - **GPIO Integration**: Device tree symbolic name support for Linux
+//! - **Callbacks**: Event-driven sensor data handling
+//!
+//! ## Quick Start
 //!
 //! ```no_run
 //! use bno08x_rs::{BNO08x, SENSOR_REPORTID_ACCELEROMETER};
 //!
 //! fn main() -> std::io::Result<()> {
-//!     let mut imu = BNO08x::new_spi_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
+//!     // Create driver using GPIO symbolic names
+//!     let mut imu = BNO08x::new_spi_from_symbol(
+//!         "/dev/spidev1.0",  // SPI device
+//!         "IMU_INT",         // Interrupt GPIO name
+//!         "IMU_RST",         // Reset GPIO name
+//!     )?;
 //!
+//!     // Initialize and configure
 //!     imu.init().expect("Failed to initialize IMU");
-//!     imu.enable_report(SENSOR_REPORTID_ACCELEROMETER, 100)
-//!         .unwrap();
+//!     imu.enable_report(SENSOR_REPORTID_ACCELEROMETER, 100)?;  // 10 Hz
 //!
+//!     // Main loop
 //!     loop {
 //!         imu.handle_all_messages(100);
-//!         let accel = imu.accelerometer().unwrap();
+//!         let accel = imu.accelerometer()?;
 //!         println!("Accel: {:?}", accel);
 //!     }
 //! }
 //! ```
+//!
+//! ## Sensor Reports
+//!
+//! Enable specific sensor reports using their report ID constants:
+//!
+//! | Report | Constant | Method | Units |
+//! |--------|----------|--------|-------|
+//! | Accelerometer | [`SENSOR_REPORTID_ACCELEROMETER`] | [`accelerometer()`](BNO08x::accelerometer) | m/s² |
+//! | Gyroscope | [`SENSOR_REPORTID_GYROSCOPE`] | [`gyro()`](BNO08x::gyro) | rad/s |
+//! | Magnetometer | [`SENSOR_REPORTID_MAGNETIC_FIELD`] | [`mag_field()`](BNO08x::mag_field) | µT |
+//! | Rotation Vector | [`SENSOR_REPORTID_ROTATION_VECTOR`] | [`rotation_quaternion()`](BNO08x::rotation_quaternion) | quaternion |
+//! | Game Rotation | [`SENSOR_REPORTID_ROTATION_VECTOR_GAME`] | [`game_rotation_quaternion()`](BNO08x::game_rotation_quaternion) | quaternion |
+//! | Geomagnetic Rotation | [`SENSOR_REPORTID_ROTATION_VECTOR_GEOMAGNETIC`] | [`geomag_rotation_quaternion()`](BNO08x::geomag_rotation_quaternion) | quaternion |
+//! | Linear Acceleration | [`SENSOR_REPORTID_LINEAR_ACCEL`] | [`linear_accel()`](BNO08x::linear_accel) | m/s² |
+//! | Gravity | [`SENSOR_REPORTID_GRAVITY`] | [`gravity()`](BNO08x::gravity) | m/s² |
+//!
+//! ## Hardware Requirements
+//!
+//! - Linux with SPI (`spidev`) and GPIO (`gpiod`) support
+//! - BNO08x sensor connected via SPI
+//! - GPIO for interrupt (HINTN) and reset (RSTN) signals
 
 pub mod constants;
 pub mod driver;

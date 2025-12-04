@@ -437,4 +437,117 @@ mod tests {
         let mag_sq: f32 = q[0].powi(2) + q[1].powi(2) + q[2].powi(2) + q[3].powi(2);
         assert!((mag_sq - 1.0).abs() < 0.01);
     }
+
+    #[test]
+    fn test_update_rotation_quaternion_geomag() {
+        let mut data = SensorData::new();
+        // Q14 format: 16384 = 1.0
+        data.update_rotation_quaternion_geomag(0, 0, 0, 16384, 4096);
+        assert!((data.geomag_rotation_quaternion[0]).abs() < 0.001);
+        assert!((data.geomag_rotation_quaternion[1]).abs() < 0.001);
+        assert!((data.geomag_rotation_quaternion[2]).abs() < 0.001);
+        assert!((data.geomag_rotation_quaternion[3] - 1.0).abs() < 0.001);
+        // Accuracy in Q12 format: 4096 = 1.0 radian
+        assert!((data.geomag_rotation_acc - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_update_rotation_quaternion_game() {
+        let mut data = SensorData::new();
+        // Q14 format: 16384 = 1.0
+        data.update_rotation_quaternion_game(8192, 8192, 0, 0);
+        assert!((data.game_rotation_quaternion[0] - 0.5).abs() < 0.001);
+        assert!((data.game_rotation_quaternion[1] - 0.5).abs() < 0.001);
+        assert!((data.game_rotation_quaternion[2]).abs() < 0.001);
+        assert!((data.game_rotation_quaternion[3]).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_update_gyro_uncalib() {
+        let mut data = SensorData::new();
+        // Q9 format: 512 = 1.0 rad/s
+        data.update_gyro_uncalib(512, -512, 0);
+        assert!((data.uncalib_gyro[0] - 1.0).abs() < 0.01);
+        assert!((data.uncalib_gyro[1] + 1.0).abs() < 0.01);
+        assert!((data.uncalib_gyro[2]).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_report_state_new() {
+        let state: ReportState<'_, ()> = ReportState::new();
+        
+        // All reports should be disabled initially
+        for i in 0..16u8 {
+            assert!(!state.is_enabled(i));
+            assert_eq!(state.last_update_time(i), 0);
+        }
+    }
+
+    #[test]
+    fn test_report_state_enable_disable() {
+        let mut state: ReportState<'_, ()> = ReportState::new();
+        
+        state.set_enabled(1, true);
+        assert!(state.is_enabled(1));
+        assert!(!state.is_enabled(0));
+        
+        state.set_enabled(1, false);
+        assert!(!state.is_enabled(1));
+    }
+
+    #[test]
+    fn test_report_state_update_time() {
+        let mut state: ReportState<'_, ()> = ReportState::new();
+        
+        state.set_update_time(5, 12345678);
+        assert_eq!(state.last_update_time(5), 12345678);
+        assert_eq!(state.last_update_time(0), 0);
+    }
+
+    #[test]
+    fn test_report_state_bounds_checking() {
+        let mut state: ReportState<'_, ()> = ReportState::new();
+        
+        // Test with out-of-bounds report ID
+        assert!(!state.is_enabled(255));
+        assert_eq!(state.last_update_time(255), 0);
+        
+        // These should not panic
+        state.set_enabled(255, true);
+        state.set_update_time(255, 1000);
+        
+        // Values should still be default (no effect)
+        assert!(!state.is_enabled(255));
+    }
+
+    #[test]
+    fn test_report_state_callback_management() {
+        let mut state: ReportState<'_, i32> = ReportState::new();
+        
+        // Add a callback
+        let called = std::rc::Rc::new(std::cell::Cell::new(false));
+        let called_clone = called.clone();
+        state.add_callback(1, "test".to_string(), Box::new(move |_| {
+            called_clone.set(true);
+        }));
+        
+        // Check callback exists (via callbacks map length)
+        assert!(!state.callbacks[1].is_empty());
+        assert!(state.callbacks[2].is_empty());
+        
+        // Remove callback
+        state.remove_callback(1, "test");
+        assert!(state.callbacks[1].is_empty());
+    }
+
+    #[test]
+    fn test_report_state_callback_bounds() {
+        let mut state: ReportState<'_, ()> = ReportState::new();
+        
+        // Out of bounds should not panic
+        state.add_callback(255, "test".to_string(), Box::new(|_| {}));
+        
+        // Remove on out-of-bounds should not panic
+        state.remove_callback(255, "test");
+    }
 }

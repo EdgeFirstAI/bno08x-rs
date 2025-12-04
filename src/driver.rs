@@ -3,9 +3,52 @@
 
 //! BNO08x IMU driver implementation.
 //!
-//! This module contains the main driver for the BNO08x family of IMU sensors.
+//! This module contains the main [`BNO08x`] driver for the BNO08x family of IMU sensors.
 //! It provides a high-level API for initializing the sensor, enabling reports,
 //! and reading sensor data.
+//!
+//! # Supported Sensors
+//!
+//! This driver supports the following sensor reports:
+//!
+//! | Report | Constant | Data Type | Units |
+//! |--------|----------|-----------|-------|
+//! | Accelerometer | [`SENSOR_REPORTID_ACCELEROMETER`] | `[f32; 3]` | m/s² |
+//! | Gyroscope | [`SENSOR_REPORTID_GYROSCOPE`] | `[f32; 3]` | rad/s |
+//! | Magnetometer | [`SENSOR_REPORTID_MAGNETIC_FIELD`] | `[f32; 3]` | µT |
+//! | Rotation Vector | [`SENSOR_REPORTID_ROTATION_VECTOR`] | `[f32; 4]` | quaternion |
+//! | Game Rotation Vector | [`SENSOR_REPORTID_ROTATION_VECTOR_GAME`] | `[f32; 4]` | quaternion |
+//! | Geomagnetic Rotation | [`SENSOR_REPORTID_ROTATION_VECTOR_GEOMAGNETIC`] | `[f32; 4]` | quaternion |
+//! | Linear Acceleration | [`SENSOR_REPORTID_LINEAR_ACCEL`] | `[f32; 3]` | m/s² |
+//! | Gravity | [`SENSOR_REPORTID_GRAVITY`] | `[f32; 3]` | m/s² |
+//! | Uncalibrated Gyroscope | [`SENSOR_REPORTID_GYROSCOPE_UNCALIB`] | `[f32; 3]` | rad/s |
+//!
+//! # Example
+//!
+//! ```no_run
+//! use bno08x_rs::{BNO08x, SENSOR_REPORTID_ACCELEROMETER};
+//!
+//! let mut imu = BNO08x::new_spi_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
+//! imu.init()?;
+//! imu.enable_report(SENSOR_REPORTID_ACCELEROMETER, 100)?;  // 10 Hz
+//!
+//! loop {
+//!     imu.handle_all_messages(100);
+//!     let accel = imu.accelerometer()?;
+//!     println!("Accel: {:?}", accel);
+//! }
+//! # Ok::<(), std::io::Error>(())
+//! ```
+//!
+//! [`SENSOR_REPORTID_ACCELEROMETER`]: crate::SENSOR_REPORTID_ACCELEROMETER
+//! [`SENSOR_REPORTID_GYROSCOPE`]: crate::SENSOR_REPORTID_GYROSCOPE
+//! [`SENSOR_REPORTID_MAGNETIC_FIELD`]: crate::SENSOR_REPORTID_MAGNETIC_FIELD
+//! [`SENSOR_REPORTID_ROTATION_VECTOR`]: crate::SENSOR_REPORTID_ROTATION_VECTOR
+//! [`SENSOR_REPORTID_ROTATION_VECTOR_GAME`]: crate::SENSOR_REPORTID_ROTATION_VECTOR_GAME
+//! [`SENSOR_REPORTID_ROTATION_VECTOR_GEOMAGNETIC`]: crate::SENSOR_REPORTID_ROTATION_VECTOR_GEOMAGNETIC
+//! [`SENSOR_REPORTID_LINEAR_ACCEL`]: crate::SENSOR_REPORTID_LINEAR_ACCEL
+//! [`SENSOR_REPORTID_GRAVITY`]: crate::SENSOR_REPORTID_GRAVITY
+//! [`SENSOR_REPORTID_GYROSCOPE_UNCALIB`]: crate::SENSOR_REPORTID_GYROSCOPE_UNCALIB
 
 use crate::{
     constants::{
@@ -46,23 +89,60 @@ use std::{
 /// Type alias for sensor update callback functions
 type ReportCallbackMap<'a, SI> = HashMap<String, Box<dyn Fn(&BNO08x<'a, SI>) + 'a>>;
 
-/// Driver-level errors
+/// Driver-level errors that can occur during BNO08x operations.
+///
+/// This enum wraps communication errors from the underlying interface
+/// and adds driver-specific error conditions.
 #[derive(Debug)]
 pub enum DriverError<E> {
-    /// Communications error
+    /// Communications error from the underlying SPI/I2C interface
     CommError(E),
-    /// Invalid chip ID was read
+    /// Invalid chip ID was read during initialization
     InvalidChipId(u8),
-    /// Unsupported sensor firmware version
+    /// Unsupported sensor firmware version detected
     InvalidFWVersion(u8),
-    /// We expected some data but didn't receive any
+    /// Expected sensor data but none was available
     NoDataAvailable,
 }
 
-/// BNO08x IMU driver
+/// BNO08x IMU driver.
 ///
 /// This struct provides the main interface for communicating with BNO08x
-/// family IMU sensors over SPI or I2C.
+/// family IMU sensors (BNO080, BNO085, BNO086) over SPI.
+///
+/// # Usage
+///
+/// 1. Create the driver using [`new_spi`] or [`new_spi_from_symbol`]
+/// 2. Initialize the sensor with [`init`]
+/// 3. Enable desired sensor reports with [`enable_report`]
+/// 4. Call [`handle_messages`] or [`handle_all_messages`] to process incoming data
+/// 5. Read sensor values with accessor methods like [`accelerometer`], [`rotation_quaternion`], etc.
+///
+/// # Example
+///
+/// ```no_run
+/// use bno08x_rs::{BNO08x, SENSOR_REPORTID_ROTATION_VECTOR};
+///
+/// let mut imu = BNO08x::new_spi_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
+/// imu.init()?;
+/// imu.enable_report(SENSOR_REPORTID_ROTATION_VECTOR, 100)?;
+///
+/// loop {
+///     imu.handle_all_messages(100);
+///     let quat = imu.rotation_quaternion()?;
+///     println!("Quaternion: {:?}", quat);
+/// }
+/// # Ok::<(), std::io::Error>(())
+/// ```
+///
+/// [`new_spi`]: BNO08x::new_spi
+/// [`new_spi_from_symbol`]: BNO08x::new_spi_from_symbol
+/// [`init`]: BNO08x::init
+/// [`enable_report`]: BNO08x::enable_report
+/// [`handle_messages`]: BNO08x::handle_messages
+/// [`handle_all_messages`]: BNO08x::handle_all_messages
+/// [`accelerometer`]: BNO08x::accelerometer
+/// [`rotation_quaternion`]: BNO08x::rotation_quaternion
 pub struct BNO08x<'a, SI> {
     pub(crate) sensor_interface: SI,
     /// Each communication channel with the device has its own sequence number
@@ -288,7 +368,10 @@ where
     SI: SensorInterface<SensorError = SE>,
     SE: core::fmt::Debug,
 {
-    /// Consume all available messages on the port without processing them
+    /// Consume all available messages on the port without processing them.
+    ///
+    /// This is useful for clearing the message queue before starting
+    /// a new measurement sequence.
     pub fn eat_all_messages(&mut self) {
         loop {
             let msg_count = self.eat_one_message();
@@ -299,7 +382,29 @@ where
         }
     }
 
-    /// Handle up to `max_count` messages with the given timeout
+    /// Handle up to `max_count` messages with the given timeout.
+    ///
+    /// This method processes incoming sensor messages and updates internal
+    /// sensor data. It returns when either `max_count` messages have been
+    /// processed or no more messages are available within the timeout.
+    ///
+    /// # Arguments
+    ///
+    /// * `timeout_ms` - Maximum time to wait for each message (milliseconds)
+    /// * `max_count` - Maximum number of messages to process
+    ///
+    /// # Returns
+    ///
+    /// The total number of messages processed.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use bno08x_rs::BNO08x;
+    /// # let mut imu: BNO08x<bno08x_rs::interface::SpiInterface<_, _, _>> = todo!();
+    /// // Process up to 20 messages, waiting up to 10ms for each
+    /// let processed = imu.handle_messages(10, 20);
+    /// ```
     pub fn handle_messages(&mut self, timeout_ms: usize, max_count: u32) -> u32 {
         let mut total_handled: u32 = 0;
         let mut i: u32 = 0;
@@ -316,7 +421,33 @@ where
         total_handled
     }
 
-    /// Handle any messages with a timeout
+    /// Handle all available messages with a timeout.
+    ///
+    /// This method continuously processes incoming sensor messages until
+    /// no more messages are available within the timeout period. Use this
+    /// in your main loop to keep sensor data up to date.
+    ///
+    /// # Arguments
+    ///
+    /// * `timeout_ms` - Maximum time to wait for each message (milliseconds)
+    ///
+    /// # Returns
+    ///
+    /// The total number of messages processed.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use bno08x_rs::BNO08x;
+    /// # let mut imu: BNO08x<bno08x_rs::interface::SpiInterface<_, _, _>> = todo!();
+    /// loop {
+    ///     // Process all available messages, waiting up to 100ms
+    ///     imu.handle_all_messages(100);
+    ///     
+    ///     // Read updated sensor data
+    ///     let accel = imu.accelerometer().unwrap();
+    /// }
+    /// ```
     pub fn handle_all_messages(&mut self, timeout_ms: usize) -> u32 {
         let mut total_handled: u32 = 0;
         loop {
@@ -727,8 +858,27 @@ where
 
     /// Initialize the BNO08x sensor.
     ///
-    /// The BNO080 starts up with all sensors disabled, waiting for the
-    /// application to configure it.
+    /// This method must be called after creating the driver and before
+    /// enabling any sensor reports. It performs the following:
+    ///
+    /// 1. Sets up the communication interface (SPI/GPIO)
+    /// 2. Performs a soft reset if required by the interface
+    /// 3. Processes initial advertisement and reset responses
+    /// 4. Verifies the sensor product ID
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DriverError::CommError`] if communication fails, or
+    /// [`DriverError::InvalidChipId`] if the sensor doesn't respond correctly.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use bno08x_rs::BNO08x;
+    /// let mut imu = BNO08x::new_spi_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
+    /// imu.init().expect("Failed to initialize IMU");
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     pub fn init(&mut self) -> Result<(), DriverError<SE>> {
         trace!("driver init");
 

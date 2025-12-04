@@ -80,3 +80,121 @@ pub fn is_write_failed(status: u8) -> bool {
 pub fn is_no_data(status: u8) -> bool {
     status == FRS_STATUS_NO_DATA
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::constants::{
+        FRS_STATUS_BUSY, FRS_STATUS_RECORD_INVALID, FRS_STATUS_RECORD_VALID,
+        FRS_STATUS_WORD_RECEIVED,
+    };
+
+    #[test]
+    fn test_build_frs_write_request() {
+        let req = build_frs_write_request(4, FRS_TYPE_SENSOR_ORIENTATION);
+
+        assert_eq!(req[0], SHUB_FRS_WRITE_REQ);
+        assert_eq!(req[1], 0); // reserved
+        assert_eq!(req[2], 4); // length LSB
+        assert_eq!(req[3], 0); // length MSB
+        assert_eq!(req[4], 0x3E); // FRS type LSB (0x2D3E)
+        assert_eq!(req[5], 0x2D); // FRS type MSB
+    }
+
+    #[test]
+    fn test_build_frs_write_request_large_values() {
+        let req = build_frs_write_request(0x1234, 0xABCD);
+
+        assert_eq!(req[2], 0x34); // length LSB
+        assert_eq!(req[3], 0x12); // length MSB
+        assert_eq!(req[4], 0xCD); // FRS type LSB
+        assert_eq!(req[5], 0xAB); // FRS type MSB
+    }
+
+    #[test]
+    fn test_build_frs_write_data() {
+        let data0 = [0x01, 0x02, 0x03, 0x04];
+        let data1 = [0x05, 0x06, 0x07, 0x08];
+        let cmd = build_frs_write_data(0, data0, data1);
+
+        assert_eq!(cmd[0], SHUB_FRS_WRITE_DATA_REQ);
+        assert_eq!(cmd[1], 0); // reserved
+        assert_eq!(cmd[2], 0); // offset LSB
+        assert_eq!(cmd[3], 0); // offset MSB
+        assert_eq!(cmd[4..8], data0);
+        assert_eq!(cmd[8..12], data1);
+    }
+
+    #[test]
+    fn test_build_frs_write_data_with_offset() {
+        let data0 = [0x11, 0x22, 0x33, 0x44];
+        let data1 = [0x55, 0x66, 0x77, 0x88];
+        let cmd = build_frs_write_data(0x0102, data0, data1);
+
+        assert_eq!(cmd[2], 0x02); // offset LSB
+        assert_eq!(cmd[3], 0x01); // offset MSB
+    }
+
+    #[test]
+    fn test_quaternion_to_frs_words_identity() {
+        // Identity quaternion: [0, 0, 0, 1]
+        let (qi, qj, qk, qr) = quaternion_to_frs_words(0.0, 0.0, 0.0, 1.0);
+
+        // qi, qj, qk should be 0
+        assert_eq!(qi, [0, 0, 0, 0]);
+        assert_eq!(qj, [0, 0, 0, 0]);
+        assert_eq!(qk, [0, 0, 0, 0]);
+        // qr should be 1.0 in Q30 format = 0x40000000
+        assert_eq!(qr, [0x00, 0x00, 0x00, 0x40]);
+    }
+
+    #[test]
+    fn test_quaternion_to_frs_words_half() {
+        // Test with 0.5 values
+        let (qi, _qj, _qk, _qr) = quaternion_to_frs_words(0.5, 0.5, 0.5, 0.5);
+
+        // 0.5 in Q30 = 0x20000000
+        assert_eq!(qi, [0x00, 0x00, 0x00, 0x20]);
+    }
+
+    #[test]
+    fn test_is_write_ready() {
+        assert!(is_write_ready(FRS_STATUS_WRITE_READY));
+        assert!(!is_write_ready(FRS_STATUS_WRITE_COMPLETE));
+        assert!(!is_write_ready(FRS_STATUS_WRITE_FAILED));
+        assert!(!is_write_ready(FRS_STATUS_NO_DATA));
+    }
+
+    #[test]
+    fn test_is_write_complete() {
+        assert!(is_write_complete(FRS_STATUS_WRITE_COMPLETE));
+        assert!(!is_write_complete(FRS_STATUS_WRITE_READY));
+        assert!(!is_write_complete(FRS_STATUS_WRITE_FAILED));
+        assert!(!is_write_complete(FRS_STATUS_NO_DATA));
+    }
+
+    #[test]
+    fn test_is_write_failed() {
+        assert!(is_write_failed(FRS_STATUS_WRITE_FAILED));
+        assert!(!is_write_failed(FRS_STATUS_WRITE_COMPLETE));
+        assert!(!is_write_failed(FRS_STATUS_WRITE_READY));
+        assert!(!is_write_failed(FRS_STATUS_NO_DATA));
+    }
+
+    #[test]
+    fn test_is_no_data() {
+        assert!(is_no_data(FRS_STATUS_NO_DATA));
+        assert!(!is_no_data(FRS_STATUS_WRITE_READY));
+        assert!(!is_no_data(FRS_STATUS_WRITE_COMPLETE));
+        assert!(!is_no_data(FRS_STATUS_WRITE_FAILED));
+    }
+
+    #[test]
+    fn test_frs_status_coverage() {
+        // Ensure the status check functions return false for other status values
+        assert!(!is_write_ready(FRS_STATUS_WORD_RECEIVED));
+        assert!(!is_write_ready(FRS_STATUS_BUSY));
+        assert!(!is_write_ready(FRS_STATUS_RECORD_VALID));
+        assert!(!is_write_ready(FRS_STATUS_RECORD_INVALID));
+    }
+}
