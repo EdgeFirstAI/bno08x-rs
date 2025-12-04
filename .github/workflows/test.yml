@@ -132,7 +132,9 @@ jobs:
         run: |
           # Run tests with JUnit XML and LCOV coverage output using profiling profile (optimized + debug symbols)
           # --profile profiling = nextest profile, --cargo-profile profiling = cargo profile
-          cargo llvm-cov nextest --lib --workspace --lcov --output-path coverage.lcov --profile profiling --cargo-profile profiling --no-fail-fast
+          # Note: Builds ALL tests (including integration) but only runs non-ignored tests
+          # Integration tests are marked #[ignore] so they're skipped here, run later on hardware
+          cargo llvm-cov nextest --workspace --lcov --output-path coverage.lcov --profile profiling --cargo-profile profiling --no-fail-fast
 
           # Run doc tests separately (nextest doesn't support doc tests)
           cargo test --doc --workspace --profile profiling --no-fail-fast
@@ -146,20 +148,18 @@ jobs:
           reporter: java-junit
           fail-on-error: false
 
-      - name: Build instrumented test archive for hardware testing (aarch64 only)
+      - name: Prepare instrumented binaries for hardware testing (aarch64 only)
         if: matrix.platform.name == 'aarch64'
         run: |
-          # Build test archive using profiling profile (optimized + debug symbols)
-          # This reuses the already-built instrumented binaries from the test step above
-          # Create nextest archive with profiling build for hardware testing
-          cargo nextest archive \
-            --archive-file hardware-tests.tar.zst \
-            --workspace \
-            --profile profiling \
-            --cargo-profile profiling
+          # Copy instrumented test binaries for upload
+          # The instrumented binaries from cargo llvm-cov are in target/llvm-cov-target/profiling/
+          mkdir -p hardware-test-binaries
 
-          echo "Created nextest archive:"
-          ls -lh hardware-tests.tar.zst
+          # Copy all instrumented test binaries (integration tests)
+          find target/llvm-cov-target/profiling/deps -name "*integration*" -type f -executable -exec cp {} hardware-test-binaries/ \;
+
+          echo "Instrumented test binaries for hardware:"
+          ls -lh hardware-test-binaries/
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
@@ -168,12 +168,12 @@ jobs:
           path: coverage.lcov
           retention-days: 30
 
-      - name: Upload test archive for hardware testing (aarch64 only)
+      - name: Upload instrumented test binaries for hardware testing (aarch64 only)
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
         if: matrix.platform.name == 'aarch64'
         with:
-          name: hardware-tests-archive
-          path: hardware-tests.tar.zst
+          name: hardware-test-binaries
+          path: hardware-test-binaries/
           retention-days: 7
 
       - name: Upload Rust instrumented objects for coverage processing (aarch64 only)
@@ -207,49 +207,50 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@92e6dd1c202153a204d471a3c509bf1e03dcfa44  # v2.62.61
-        with:
-          tool: cargo-nextest
-
-      - name: Download test archive
+      - name: Download instrumented test binaries
         uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53  # v6.0.0
         with:
-          name: hardware-tests-archive
-          path: .
+          name: hardware-test-binaries
+          path: hardware-test-binaries/
 
-      - name: Run hardware integration tests from archive
+      - name: Run instrumented hardware integration tests
         run: |
           # Set up profraw collection directory for coverage
-          mkdir -p coverage/profraw
+          mkdir -p coverage/profraw coverage/test-output
           export LLVM_PROFILE_FILE="${{ github.workspace }}/coverage/profraw/raivin-%p-%m.profraw"
 
-          # Extract and run tests from nextest archive with profiling profile
-          # --workspace-remap . = map archive workspace to current directory for junit.xml output
-          # --profile profiling = use profiling nextest profile (matches archive)
-          # --run-ignored only = run only tests marked with #[ignore]
-          # --test-threads=1 for deterministic execution on hardware
-          # --no-fail-fast to run all tests even if some fail
-          cargo nextest run \
-            --archive-file hardware-tests.tar.zst \
-            --workspace-remap . \
-            --profile profiling \
-            --test-threads=1 \
-            --no-fail-fast \
-            --run-ignored only
+          # Make binaries executable
+          chmod +x hardware-test-binaries/*
+
+          # Track overall test status
+          TEST_FAILED=0
+
+          # Run each instrumented test binary directly
+          # These are coverage-instrumented binaries from cargo llvm-cov
+          echo "Running instrumented integration test binaries..."
+          for test_bin in hardware-test-binaries/*; do
+            if [ -x "$test_bin" ] && [ -f "$test_bin" ]; then
+              test_name=$(basename "$test_bin")
+              echo "=== Running $test_name ==="
+              # --test-threads=1 for deterministic execution on hardware
+              # --include-ignored to run hardware integration tests marked with #[ignore]
+              if ! "$test_bin" --test-threads=1 --include-ignored 2>&1 | tee "coverage/test-output/${test_name}.txt"; then
+                echo "FAILED: $test_name"
+                TEST_FAILED=1
+              fi
+            fi
+          done
 
           echo ""
           echo "=== Profraw files generated ==="
           ls -la coverage/profraw/ || echo "No profraw files generated"
 
-      - name: Publish Hardware Test Report
-        uses: dorny/test-reporter@v2
-        if: always()
-        with:
-          name: Test Results (Hardware - raivin)
-          path: target/nextest/profiling/junit.xml
-          reporter: java-junit
-          fail-on-error: false
+          # Fail the step if any test failed
+          if [ $TEST_FAILED -ne 0 ]; then
+            echo ""
+            echo "ERROR: One or more integration tests failed!"
+            exit 1
+          fi
 
       - name: Upload hardware coverage artifact
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
@@ -258,6 +259,7 @@ jobs:
           name: coverage-hardware
           path: |
             coverage/profraw/
+            coverage/test-output/
           retention-days: 30
 
   process-hardware-coverage:
