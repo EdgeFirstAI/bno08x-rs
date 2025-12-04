@@ -21,7 +21,7 @@
 //! # Example
 //!
 //! ```no_run
-//! use bno08x::{BNO08x, SENSOR_REPORTID_ACCELEROMETER};
+//! use bno08x_rs::{BNO08x, SENSOR_REPORTID_ACCELEROMETER};
 //!
 //! fn main() -> std::io::Result<()> {
 //!     let mut imu = BNO08x::new_spi_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;

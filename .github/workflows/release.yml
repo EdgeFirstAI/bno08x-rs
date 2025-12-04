@@ -99,7 +99,7 @@ jobs:
     needs: prepare-release
     environment:
       name: crates-io
-      url: https://crates.io/crates/bno08x
+      url: https://crates.io/crates/bno08x-rs
 
     steps:
       - name: Checkout code
@@ -181,7 +181,7 @@ jobs:
             ### Rust (crates.io)
             ```toml
             [dependencies]
-            bno08x = "${{ needs.prepare-release.outputs.version }}"
+            bno08x-rs = "${{ needs.prepare-release.outputs.version }}"
             ```
 
             ---
@@ -198,9 +198,9 @@ jobs:
 
             ## Links
 
-            - [crates.io](https://crates.io/crates/bno08x/${{ needs.prepare-release.outputs.version }})
-            - [Documentation](https://docs.rs/bno08x/${{ needs.prepare-release.outputs.version }})
-            - [Changelog](https://github.com/EdgeFirstAI/bno08x/blob/main/CHANGELOG.md)
+            - [crates.io](https://crates.io/crates/bno08x-rs/${{ needs.prepare-release.outputs.version }})
+            - [Documentation](https://docs.rs/bno08x-rs/${{ needs.prepare-release.outputs.version }})
+            - [Changelog](https://github.com/EdgeFirstAI/bno08x-rs/blob/main/CHANGELOG.md)
           files: |
             release-assets/*
           draft: false

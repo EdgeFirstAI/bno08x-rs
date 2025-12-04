@@ -1,30 +1,37 @@
 [package]
-name = "bno08x"
+name = "bno08x-rs"
 description = "BNO08x IMU User Space Driver"
-repository = "https://github.com/EdgeFirstAI/bno08x"
+repository = "https://github.com/EdgeFirstAI/bno08x-rs"
 license = "Apache-2.0"
-version = "1.0.1"
+version = "2.0.0"
 edition = "2021"
 readme = "README.md"
+keywords = ["imu", "sensor", "bno08x", "embedded", "spi"]
+categories = ["hardware-support", "embedded"]
+authors = ["Au-Zone Technologies Inc."]
+homepage = "https://edgefirst.ai/"
+rust-version = "1.90"
 
-[[bin]]
-name = "bno08x"
-path = "src/main.rs"
+exclude = ["sonar-project.properties", ".github/"]
 
 [lib]
-name = "bno08x"
+name = "bno08x_rs"
 path = "src/lib.rs"
+
+[[bin]]
+name = "bno08x-rs"
+path = "src/main.rs"
+
+[features]
+default = []
 
 [dependencies]
 gpiod = "0.3.0"
 log = "0.4.25"
-spidev = "0.6.0"
+spidev = "0.7.1"
 
 [dev-dependencies]
 env_logger = "0.11"
-
-[features]
-default = []
 
 # Cargo profiles
 # Reference: ~/Documents/SPS/11-cicd-pipelines.md

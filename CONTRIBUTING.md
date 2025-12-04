@@ -25,7 +25,7 @@ The BNO08x driver is a Rust userspace library for communicating with BNO08x 9-ax
 
 1. Read the [README.md](README.md) to understand the project
 2. Review the [ARCHITECTURE.md](ARCHITECTURE.md) for design patterns
-3. Check existing [issues](https://github.com/EdgeFirstAI/bno08x/issues) and [discussions](https://github.com/EdgeFirstAI/bno08x/discussions)
+3. Check existing [issues](https://github.com/EdgeFirstAI/bno08x-rs/issues) and [discussions](https://github.com/EdgeFirstAI/bno08x-rs/discussions)
 4. Browse the [EdgeFirst Documentation](https://doc.edgefirst.ai/latest/) for context
 
 ### Ways to Contribute
@@ -39,7 +39,7 @@ The BNO08x driver is a Rust userspace library for communicating with BNO08x 9-ax
 
 ### Prerequisites
 
-- **Rust**: 1.70 or later ([install instructions](https://rustup.rs/))
+- **Rust**: 1.90 or later ([install instructions](https://rustup.rs()))
 - **Git**: For version control
 - **Hardware** (optional): BNO08x sensor with SPI/GPIO for integration testing
 
@@ -47,8 +47,8 @@ The BNO08x driver is a Rust userspace library for communicating with BNO08x 9-ax
 
 ```bash
 # Clone the repository
-git clone https://github.com/EdgeFirstAI/bno08x.git
-cd bno08x
+git clone https://github.com/EdgeFirstAI/bno08x-rs.git
+cd bno08x-rs
 
 # Build
 cargo build
@@ -292,8 +292,8 @@ All source files must include the SPDX license header:
 ## Questions?
 
 - **Documentation**: https://doc.edgefirst.ai/latest/
-- **Discussions**: https://github.com/EdgeFirstAI/bno08x/discussions
-- **Issues**: https://github.com/EdgeFirstAI/bno08x/issues
+- **Discussions**: https://github.com/EdgeFirstAI/bno08x-rs/discussions
+- **Issues**: https://github.com/EdgeFirstAI/bno08x-rs/issues
 - **Email**: support@au-zone.com
 
 Thank you for helping make the BNO08x driver better!

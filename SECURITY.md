@@ -9,7 +9,7 @@ We take the security of BNO08x driver seriously. If you discover a security vuln
 Instead, please use one of the following methods:
 
 1. **Email**: Send details to support@au-zone.com with subject line: "Security Vulnerability - BNO08x Driver"
-2. **GitHub Security Advisory**: Use the [private reporting feature](https://github.com/EdgeFirstAI/bno08x/security/advisories/new)
+2. **GitHub Security Advisory**: Use the [private reporting feature](https://github.com/EdgeFirstAI/bno08x-rs/security/advisories/new)
 
 ### Information to Include
 

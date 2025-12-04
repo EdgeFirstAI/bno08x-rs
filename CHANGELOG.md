@@ -25,9 +25,9 @@ This release contains breaking API changes. See [Migration Guide](#migration-fro
 
 | Old (v1.x) | New (v2.0) |
 |------------|------------|
-| `bno08x::wrapper::BNO08x` | `bno08x::BNO08x` |
-| `bno08x::wrapper::WrapperError` | `bno08x::DriverError` |
-| `bno08x::wrapper::SENSOR_REPORTID_*` | `bno08x::SENSOR_REPORTID_*` |
+| `bno08x::wrapper::BNO08x` | `bno08x_rs::BNO08x` |
+| `bno08x::wrapper::WrapperError` | `bno08x_rs::DriverError` |
+| `bno08x::wrapper::SENSOR_REPORTID_*` | `bno08x_rs::SENSOR_REPORTID_*` |
 
 ### Added
 
@@ -74,7 +74,7 @@ use bno08x::wrapper::{
 };
 
 // After (v2.0)
-use bno08x::{
+use bno08x_rs::{
     BNO08x, DriverError,
     SENSOR_REPORTID_ACCELEROMETER, SENSOR_REPORTID_ROTATION_VECTOR,
 };
@@ -191,6 +191,6 @@ The following APIs remain unchanged and require no migration:
   - Error reporting and handling
   - Feature enable/disable commands
 
-[Unreleased]: https://github.com/EdgeFirstAI/bno08x/compare/v2.0.0...HEAD
-[2.0.0]: https://github.com/EdgeFirstAI/bno08x/compare/v1.0.1...v2.0.0
-[1.0.1]: https://github.com/EdgeFirstAI/bno08x/releases/tag/v1.0.1
+[Unreleased]: https://github.com/EdgeFirstAI/bno08x-rs/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/EdgeFirstAI/bno08x-rs/compare/v1.0.1...v2.0.0
+[1.0.1]: https://github.com/EdgeFirstAI/bno08x-rs/releases/tag/v1.0.1

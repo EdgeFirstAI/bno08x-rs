@@ -1,4 +1,4 @@
-use bno08x::{BNO08x, SENSOR_REPORTID_ACCELEROMETER};
+use bno08x_rs::{BNO08x, SENSOR_REPORTID_ACCELEROMETER};
 use std::{thread::sleep, time::Duration};
 
 fn main() {

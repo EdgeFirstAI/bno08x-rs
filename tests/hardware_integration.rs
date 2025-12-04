@@ -10,7 +10,7 @@
 //! instead of handle_all_messages() which loops forever when reports are
 //! streaming.
 
-use bno08x::{BNO08x, SENSOR_REPORTID_ACCELEROMETER, SENSOR_REPORTID_MAGNETIC_FIELD};
+use bno08x_rs::{BNO08x, SENSOR_REPORTID_ACCELEROMETER, SENSOR_REPORTID_MAGNETIC_FIELD};
 use std::{
     sync::{Arc, Mutex, Once},
     thread::sleep,
