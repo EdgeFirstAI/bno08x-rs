@@ -73,6 +73,12 @@
 //! - Linux with SPI (`spidev`) and GPIO (`gpiod`) support
 //! - BNO08x sensor connected via SPI
 //! - GPIO for interrupt (HINTN) and reset (RSTN) signals
+//!
+//! ## More Information
+//!
+//! - [Repository](https://github.com/EdgeFirstAI/bno08x-rs)
+//! - [crates.io](https://crates.io/crates/bno08x-rs)
+//! - [Maivin Platform](https://www.edgefirst.ai/edgefirstmodules)
 
 pub mod constants;
 pub mod driver;

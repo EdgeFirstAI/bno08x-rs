@@ -1,5 +1,7 @@
 # BNO08x IMU Driver
 
+[![Crates.io](https://img.shields.io/crates/v/bno08x-rs.svg)](https://crates.io/crates/bno08x-rs)
+[![Documentation](https://docs.rs/bno08x-rs/badge.svg)](https://docs.rs/bno08x-rs)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Build Status](https://github.com/EdgeFirstAI/bno08x-rs/actions/workflows/build.yml/badge.svg)](https://github.com/EdgeFirstAI/bno08x-rs/actions/workflows/build.yml)
 [![Test Status](https://github.com/EdgeFirstAI/bno08x-rs/actions/workflows/test.yml/badge.svg)](https://github.com/EdgeFirstAI/bno08x-rs/actions/workflows/test.yml)
@@ -226,7 +228,9 @@ timestamp [ns]: 1234567890123456789
 
 ## Documentation
 
-Generate and view API documentation:
+API documentation is available on [docs.rs](https://docs.rs/bno08x-rs).
+
+To build documentation locally:
 
 ```bash
 cargo doc --open
