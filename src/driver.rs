@@ -1065,6 +1065,71 @@ where
         Ok(true)
     }
 
+    /// Wait for FRS write status to change from NO_DATA.
+    ///
+    /// Polls the sensor for incoming packets until the FRS write status
+    /// changes from `NO_DATA` or the timeout expires.
+    ///
+    /// Returns `true` if status changed before timeout.
+    fn wait_for_frs_response(&mut self, timeout_ms: u128) -> bool {
+        let start = Instant::now();
+        while self.frs_write_status == FRS_STATUS_NO_DATA
+            && start.elapsed().as_millis() < timeout_ms
+        {
+            if let Ok(received_len) = self.receive_packet_with_timeout(250) {
+                if received_len > 0 {
+                    if let Err(e) = self.handle_received_packet(received_len) {
+                        warn!("{:?}", e)
+                    }
+                }
+            }
+        }
+        self.frs_write_status != FRS_STATUS_NO_DATA
+    }
+
+    /// Wait for FRS write to complete or fail.
+    ///
+    /// Polls the sensor for incoming packets until the FRS write status
+    /// indicates completion or failure, or the timeout expires.
+    ///
+    /// Returns `true` if write completed successfully.
+    fn wait_for_frs_completion(&mut self, timeout_ms: u128) -> bool {
+        let start = Instant::now();
+        while self.frs_write_status != FRS_STATUS_WRITE_FAILED
+            && self.frs_write_status != FRS_STATUS_WRITE_COMPLETE
+            && start.elapsed().as_millis() < timeout_ms
+        {
+            if let Ok(received_len) = self.receive_packet_with_timeout(250) {
+                if received_len > 0 {
+                    if let Err(e) = self.handle_received_packet(received_len) {
+                        warn!("{:?}", e)
+                    }
+                }
+            }
+        }
+        self.frs_write_status == FRS_STATUS_WRITE_COMPLETE
+    }
+
+    /// Send FRS data chunk and wait for acknowledgment.
+    ///
+    /// Sends a pair of 32-bit words to the FRS at the specified offset
+    /// and waits for the sensor to acknowledge receipt.
+    fn send_frs_data_chunk(
+        &mut self,
+        offset: u16,
+        word1: [u8; 4],
+        word2: [u8; 4],
+        timeout_ms: u128,
+    ) -> Result<(), DriverError<SE>> {
+        let cmd_body_data = build_frs_write_data(offset, word1, word2);
+        let _ = self.send_packet(CHANNEL_HUB_CONTROL, cmd_body_data.as_ref())?;
+
+        self.frs_write_status = FRS_STATUS_NO_DATA;
+        self.wait_for_frs_response(timeout_ms);
+        delay_ms(150);
+        Ok(())
+    }
+
     /// Set the sensor orientation using a quaternion.
     ///
     /// This configures the reference frame transformation applied to all
@@ -1077,21 +1142,14 @@ where
         qr: f32,
         timeout: u128,
     ) -> Result<bool, DriverError<SE>> {
+        // Step 1: Request FRS write
         let length: u16 = 4;
         let cmd_body_req = build_frs_write_request(length, FRS_TYPE_SENSOR_ORIENTATION);
         let _ = self.send_packet(CHANNEL_HUB_CONTROL, cmd_body_req.as_ref())?;
 
+        // Step 2: Wait for write ready
         self.frs_write_status = FRS_STATUS_NO_DATA;
-        let mut start = Instant::now();
-        while self.frs_write_status == FRS_STATUS_NO_DATA && start.elapsed().as_millis() < timeout {
-            if let Ok(received_len) = self.receive_packet_with_timeout(250) {
-                if received_len > 0 {
-                    if let Err(e) = self.handle_received_packet(received_len) {
-                        warn!("{:?}", e)
-                    }
-                }
-            }
-        }
+        self.wait_for_frs_response(timeout);
 
         if self.frs_write_status != FRS_STATUS_WRITE_READY {
             trace!("FRS Write not ready");
@@ -1100,45 +1158,18 @@ where
         trace!("FRS Write ready");
         delay_ms(150);
 
+        // Step 3: Convert quaternion and send data chunks
         let (q30_qi, q30_qj, q30_qk, q30_qr) = quaternion_to_frs_words(qi, qj, qk, qr);
 
-        let mut offset: u16 = 0;
-        let cmd_body_data = build_frs_write_data(offset, q30_qi, q30_qj);
-        _ = self.send_packet(CHANNEL_HUB_CONTROL, cmd_body_data.as_ref())?;
+        self.send_frs_data_chunk(0, q30_qi, q30_qj, 800)?;
+        self.send_frs_data_chunk(2, q30_qk, q30_qr, 800)?;
 
+        // Step 4: Wait for completion
         self.frs_write_status = FRS_STATUS_NO_DATA;
-        start = Instant::now();
-        while self.frs_write_status == FRS_STATUS_NO_DATA && start.elapsed().as_millis() < 800 {
-            if let Ok(received_len) = self.receive_packet_with_timeout(250) {
-                if received_len > 0 {
-                    if let Err(e) = self.handle_received_packet(received_len) {
-                        warn!("{:?}", e)
-                    }
-                }
-            }
-        }
-        delay_ms(150);
-
-        offset += 2;
-        let cmd_body_data = build_frs_write_data(offset, q30_qk, q30_qr);
-        _ = self.send_packet(CHANNEL_HUB_CONTROL, cmd_body_data.as_ref())?;
-
-        self.frs_write_status = FRS_STATUS_NO_DATA;
-        start = Instant::now();
-        while self.frs_write_status != FRS_STATUS_WRITE_FAILED
-            && self.frs_write_status != FRS_STATUS_WRITE_COMPLETE
-            && start.elapsed().as_millis() < 800
-        {
-            if let Ok(received_len) = self.receive_packet_with_timeout(250) {
-                if received_len > 0 {
-                    if let Err(e) = self.handle_received_packet(received_len) {
-                        warn!("{:?}", e)
-                    }
-                }
-            }
-        }
+        let success = self.wait_for_frs_completion(800);
         delay_ms(100);
-        Ok(self.frs_write_status == FRS_STATUS_WRITE_COMPLETE)
+
+        Ok(success)
     }
 
     /// Prepare a packet for sending, in our send buffer
