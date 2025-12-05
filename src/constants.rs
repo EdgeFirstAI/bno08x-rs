@@ -332,20 +332,53 @@ mod tests {
     #[test]
     fn test_frs_status_to_str() {
         // Test all defined FRS status codes
-        assert_eq!(frs_status_to_str(FRS_STATUS_WORD_RECEIVED), "word(s) received");
-        assert_eq!(frs_status_to_str(FRS_STATUS_UNRECOGNIZED_FRS_TYPE), "unrecognized FRS type");
+        assert_eq!(
+            frs_status_to_str(FRS_STATUS_WORD_RECEIVED),
+            "word(s) received"
+        );
+        assert_eq!(
+            frs_status_to_str(FRS_STATUS_UNRECOGNIZED_FRS_TYPE),
+            "unrecognized FRS type"
+        );
         assert_eq!(frs_status_to_str(FRS_STATUS_BUSY), "busy");
-        assert_eq!(frs_status_to_str(FRS_STATUS_WRITE_COMPLETE), "write completed");
-        assert_eq!(frs_status_to_str(FRS_STATUS_WRITE_READY), "write mode entered or ready");
+        assert_eq!(
+            frs_status_to_str(FRS_STATUS_WRITE_COMPLETE),
+            "write completed"
+        );
+        assert_eq!(
+            frs_status_to_str(FRS_STATUS_WRITE_READY),
+            "write mode entered or ready"
+        );
         assert_eq!(frs_status_to_str(FRS_STATUS_WRITE_FAILED), "write failed");
-        assert_eq!(frs_status_to_str(FRS_STATUS_DATA_RECV_NOT_IN_WRITE_MODE), "data received while not in write mode");
-        assert_eq!(frs_status_to_str(FRS_STATUS_INVALID_LENGTH), "invalid length");
-        assert_eq!(frs_status_to_str(FRS_STATUS_RECORD_VALID), "record valid (passed internal validation)");
-        assert_eq!(frs_status_to_str(FRS_STATUS_RECORD_INVALID), "record invalid (failed internal validation)");
-        assert_eq!(frs_status_to_str(FRS_STATUS_DEVICE_ERROR), "device error (DFU flash unavailable)");
-        assert_eq!(frs_status_to_str(FRS_STATUS_READONLY), "record is read only");
-        assert_eq!(frs_status_to_str(FRS_STATUS_NO_DATA), "no FRS status received");
-        
+        assert_eq!(
+            frs_status_to_str(FRS_STATUS_DATA_RECV_NOT_IN_WRITE_MODE),
+            "data received while not in write mode"
+        );
+        assert_eq!(
+            frs_status_to_str(FRS_STATUS_INVALID_LENGTH),
+            "invalid length"
+        );
+        assert_eq!(
+            frs_status_to_str(FRS_STATUS_RECORD_VALID),
+            "record valid (passed internal validation)"
+        );
+        assert_eq!(
+            frs_status_to_str(FRS_STATUS_RECORD_INVALID),
+            "record invalid (failed internal validation)"
+        );
+        assert_eq!(
+            frs_status_to_str(FRS_STATUS_DEVICE_ERROR),
+            "device error (DFU flash unavailable)"
+        );
+        assert_eq!(
+            frs_status_to_str(FRS_STATUS_READONLY),
+            "record is read only"
+        );
+        assert_eq!(
+            frs_status_to_str(FRS_STATUS_NO_DATA),
+            "no FRS status received"
+        );
+
         // Test unknown status codes
         assert_eq!(frs_status_to_str(0x0D), "reserved");
         assert_eq!(frs_status_to_str(0xFE), "reserved");

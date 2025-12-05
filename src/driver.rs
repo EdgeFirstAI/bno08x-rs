@@ -3,9 +3,9 @@
 
 //! BNO08x IMU driver implementation.
 //!
-//! This module contains the main [`BNO08x`] driver for the BNO08x family of IMU sensors.
-//! It provides a high-level API for initializing the sensor, enabling reports,
-//! and reading sensor data.
+//! This module contains the main [`BNO08x`] driver for the BNO08x family of IMU
+//! sensors. It provides a high-level API for initializing the sensor, enabling
+//! reports, and reading sensor data.
 //!
 //! # Supported Sensors
 //!
@@ -30,7 +30,7 @@
 //!
 //! let mut imu = BNO08x::new_spi_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
 //! imu.init()?;
-//! imu.enable_report(SENSOR_REPORTID_ACCELEROMETER, 100)?;  // 10 Hz
+//! imu.enable_report(SENSOR_REPORTID_ACCELEROMETER, 100)?; // 10 Hz
 //!
 //! loop {
 //!     imu.handle_all_messages(100);
@@ -115,8 +115,10 @@ pub enum DriverError<E> {
 /// 1. Create the driver using [`new_spi`] or [`new_spi_from_symbol`]
 /// 2. Initialize the sensor with [`init`]
 /// 3. Enable desired sensor reports with [`enable_report`]
-/// 4. Call [`handle_messages`] or [`handle_all_messages`] to process incoming data
-/// 5. Read sensor values with accessor methods like [`accelerometer`], [`rotation_quaternion`], etc.
+/// 4. Call [`handle_messages`] or [`handle_all_messages`] to process incoming
+///    data
+/// 5. Read sensor values with accessor methods like [`accelerometer`],
+///    [`rotation_quaternion`], etc.
 ///
 /// # Example
 ///
@@ -443,7 +445,7 @@ where
     /// loop {
     ///     // Process all available messages, waiting up to 100ms
     ///     imu.handle_all_messages(100);
-    ///     
+    ///
     ///     // Read updated sensor data
     ///     let accel = imu.accelerometer().unwrap();
     /// }

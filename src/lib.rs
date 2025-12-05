@@ -10,7 +10,7 @@
 //!
 //! The BNO08x is a System-in-Package (SiP) that integrates:
 //! - Triaxial 14-bit accelerometer
-//! - Triaxial 16-bit gyroscope  
+//! - Triaxial 16-bit gyroscope
 //! - Triaxial geomagnetic sensor
 //! - 32-bit microcontroller running sensor fusion firmware
 //!
@@ -35,14 +35,14 @@
 //! fn main() -> std::io::Result<()> {
 //!     // Create driver using GPIO symbolic names
 //!     let mut imu = BNO08x::new_spi_from_symbol(
-//!         "/dev/spidev1.0",  // SPI device
-//!         "IMU_INT",         // Interrupt GPIO name
-//!         "IMU_RST",         // Reset GPIO name
+//!         "/dev/spidev1.0", // SPI device
+//!         "IMU_INT",        // Interrupt GPIO name
+//!         "IMU_RST",        // Reset GPIO name
 //!     )?;
 //!
 //!     // Initialize and configure
 //!     imu.init().expect("Failed to initialize IMU");
-//!     imu.enable_report(SENSOR_REPORTID_ACCELEROMETER, 100)?;  // 10 Hz
+//!     imu.enable_report(SENSOR_REPORTID_ACCELEROMETER, 100)?; // 10 Hz
 //!
 //!     // Main loop
 //!     loop {
