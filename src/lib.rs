@@ -41,7 +41,7 @@
 //!     )?;
 //!
 //!     // Initialize and configure
-//!     imu.init().expect("Failed to initialize IMU");
+//!     imu.init()?;
 //!     imu.enable_report(SENSOR_REPORTID_ACCELEROMETER, 100)?; // 10 Hz
 //!
 //!     // Main loop
@@ -94,6 +94,7 @@ pub use constants::{
     SENSOR_REPORTID_ROTATION_VECTOR_GAME, SENSOR_REPORTID_ROTATION_VECTOR_GEOMAGNETIC,
 };
 pub use driver::{BNO08x, DriverError};
+pub use reports::SensorData;
 
 /// Low-level errors from the communication interface
 #[derive(Debug)]

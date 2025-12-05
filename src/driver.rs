@@ -28,16 +28,17 @@
 //! ```no_run
 //! use bno08x_rs::{BNO08x, SENSOR_REPORTID_ACCELEROMETER};
 //!
-//! let mut imu = BNO08x::new_spi_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
-//! imu.init()?;
-//! imu.enable_report(SENSOR_REPORTID_ACCELEROMETER, 100)?; // 10 Hz
+//! fn main() -> std::io::Result<()> {
+//!     let mut imu = BNO08x::new_spi_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
+//!     imu.init()?;
+//!     imu.enable_report(SENSOR_REPORTID_ACCELEROMETER, 100)?; // 10 Hz
 //!
-//! loop {
-//!     imu.handle_all_messages(100);
-//!     let accel = imu.accelerometer()?;
-//!     println!("Accel: {:?}", accel);
+//!     loop {
+//!         imu.handle_all_messages(100);
+//!         let accel = imu.accelerometer()?;
+//!         println!("Accel: {:?}", accel);
+//!     }
 //! }
-//! # Ok::<(), std::io::Error>(())
 //! ```
 //!
 //! [`SENSOR_REPORTID_ACCELEROMETER`]: crate::SENSOR_REPORTID_ACCELEROMETER
@@ -105,6 +106,24 @@ pub enum DriverError<E> {
     NoDataAvailable,
 }
 
+impl<E: std::fmt::Debug> From<DriverError<E>> for io::Error {
+    fn from(err: DriverError<E>) -> Self {
+        match err {
+            DriverError::CommError(e) => io::Error::other(format!("Communication error: {:?}", e)),
+            DriverError::InvalidChipId(id) => {
+                io::Error::new(ErrorKind::InvalidData, format!("Invalid chip ID: {}", id))
+            }
+            DriverError::InvalidFWVersion(ver) => io::Error::new(
+                ErrorKind::InvalidData,
+                format!("Invalid firmware version: {}", ver),
+            ),
+            DriverError::NoDataAvailable => {
+                io::Error::new(ErrorKind::TimedOut, "No sensor data available")
+            }
+        }
+    }
+}
+
 /// BNO08x IMU driver.
 ///
 /// This struct provides the main interface for communicating with BNO08x
@@ -125,16 +144,17 @@ pub enum DriverError<E> {
 /// ```no_run
 /// use bno08x_rs::{BNO08x, SENSOR_REPORTID_ROTATION_VECTOR};
 ///
-/// let mut imu = BNO08x::new_spi_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
-/// imu.init()?;
-/// imu.enable_report(SENSOR_REPORTID_ROTATION_VECTOR, 100)?;
+/// fn main() -> std::io::Result<()> {
+///     let mut imu = BNO08x::new_spi_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
+///     imu.init()?;
+///     imu.enable_report(SENSOR_REPORTID_ROTATION_VECTOR, 100)?;
 ///
-/// loop {
-///     imu.handle_all_messages(100);
-///     let quat = imu.rotation_quaternion()?;
-///     println!("Quaternion: {:?}", quat);
+///     loop {
+///         imu.handle_all_messages(100);
+///         let quat = imu.rotation_quaternion()?;
+///         println!("Quaternion: {:?}", quat);
+///     }
 /// }
-/// # Ok::<(), std::io::Error>(())
 /// ```
 ///
 /// [`new_spi`]: BNO08x::new_spi
@@ -402,10 +422,14 @@ where
     /// # Example
     ///
     /// ```no_run
-    /// # use bno08x_rs::BNO08x;
-    /// # let mut imu: BNO08x<bno08x_rs::interface::SpiInterface<_, _, _>> = todo!();
-    /// // Process up to 20 messages, waiting up to 10ms for each
-    /// let processed = imu.handle_messages(10, 20);
+    /// use bno08x_rs::BNO08x;
+    ///
+    /// fn main() -> std::io::Result<()> {
+    ///     let mut imu = BNO08x::new_spi_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
+    ///     // Process up to 20 messages, waiting up to 10ms for each
+    ///     let processed = imu.handle_messages(10, 20);
+    ///     Ok(())
+    /// }
     /// ```
     pub fn handle_messages(&mut self, timeout_ms: usize, max_count: u32) -> u32 {
         let mut total_handled: u32 = 0;
@@ -440,14 +464,18 @@ where
     /// # Example
     ///
     /// ```no_run
-    /// # use bno08x_rs::BNO08x;
-    /// # let mut imu: BNO08x<bno08x_rs::interface::SpiInterface<_, _, _>> = todo!();
-    /// loop {
-    ///     // Process all available messages, waiting up to 100ms
-    ///     imu.handle_all_messages(100);
+    /// use bno08x_rs::BNO08x;
     ///
-    ///     // Read updated sensor data
-    ///     let accel = imu.accelerometer().unwrap();
+    /// fn main() -> std::io::Result<()> {
+    ///     let mut imu = BNO08x::new_spi_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
+    ///     loop {
+    ///         // Process all available messages, waiting up to 100ms
+    ///         imu.handle_all_messages(100);
+    ///
+    ///         // Read updated sensor data
+    ///         let accel = imu.accelerometer()?;
+    ///         println!("Accel: {:?}", accel);
+    ///     }
     /// }
     /// ```
     pub fn handle_all_messages(&mut self, timeout_ms: usize) -> u32 {
