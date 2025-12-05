@@ -1326,5 +1326,704 @@ where
 
 #[cfg(test)]
 mod tests {
-    // Tests for driver functionality will be added as needed
+    use super::*;
+    use crate::interface::SensorInterface;
+
+    // Mock sensor interface for testing without hardware
+    struct MockSensorInterface {
+        setup_called: bool,
+        soft_reset_required: bool,
+    }
+
+    impl MockSensorInterface {
+        fn new() -> Self {
+            Self {
+                setup_called: false,
+                soft_reset_required: false,
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    struct MockError;
+
+    impl SensorInterface for MockSensorInterface {
+        type SensorError = MockError;
+
+        fn setup(&mut self) -> Result<(), Self::SensorError> {
+            self.setup_called = true;
+            Ok(())
+        }
+
+        fn write_packet(&mut self, _packet: &[u8]) -> Result<(), Self::SensorError> {
+            Ok(())
+        }
+
+        fn read_packet(&mut self, _recv_buf: &mut [u8]) -> Result<usize, Self::SensorError> {
+            Ok(0)
+        }
+
+        fn read_with_timeout(
+            &mut self,
+            _recv_buf: &mut [u8],
+            _max_ms: usize,
+        ) -> Result<usize, Self::SensorError> {
+            Ok(0)
+        }
+
+        fn send_and_receive_packet(
+            &mut self,
+            _send_buf: &[u8],
+            _recv_buf: &mut [u8],
+        ) -> Result<usize, Self::SensorError> {
+            Ok(0)
+        }
+
+        fn requires_soft_reset(&self) -> bool {
+            self.soft_reset_required
+        }
+    }
+
+    // ==========================================================================
+    // DriverError Tests
+    // ==========================================================================
+
+    #[test]
+    fn test_driver_error_comm_error_to_io_error() {
+        let err: DriverError<&str> = DriverError::CommError("test error");
+        let io_err: io::Error = err.into();
+        assert!(io_err.to_string().contains("Communication error"));
+        assert!(io_err.to_string().contains("test error"));
+    }
+
+    #[test]
+    fn test_driver_error_invalid_chip_id_to_io_error() {
+        let err: DriverError<&str> = DriverError::InvalidChipId(0x42);
+        let io_err: io::Error = err.into();
+        assert_eq!(io_err.kind(), ErrorKind::InvalidData);
+        assert!(io_err.to_string().contains("Invalid chip ID"));
+        assert!(io_err.to_string().contains("66")); // 0x42 = 66
+    }
+
+    #[test]
+    fn test_driver_error_invalid_fw_version_to_io_error() {
+        let err: DriverError<&str> = DriverError::InvalidFWVersion(0x10);
+        let io_err: io::Error = err.into();
+        assert_eq!(io_err.kind(), ErrorKind::InvalidData);
+        assert!(io_err.to_string().contains("Invalid firmware version"));
+    }
+
+    #[test]
+    fn test_driver_error_no_data_available_to_io_error() {
+        let err: DriverError<&str> = DriverError::NoDataAvailable;
+        let io_err: io::Error = err.into();
+        assert_eq!(io_err.kind(), ErrorKind::TimedOut);
+        assert!(io_err.to_string().contains("No sensor data available"));
+    }
+
+    // ==========================================================================
+    // Cursor Reading Helper Tests
+    // ==========================================================================
+
+    #[test]
+    fn test_read_u8_at_cursor() {
+        let data = [0x12, 0x34, 0x56, 0x78];
+        let mut cursor = 0;
+
+        assert_eq!(
+            BNO08x::<MockSensorInterface>::read_u8_at_cursor(&data, &mut cursor),
+            0x12
+        );
+        assert_eq!(cursor, 1);
+
+        assert_eq!(
+            BNO08x::<MockSensorInterface>::read_u8_at_cursor(&data, &mut cursor),
+            0x34
+        );
+        assert_eq!(cursor, 2);
+
+        assert_eq!(
+            BNO08x::<MockSensorInterface>::read_u8_at_cursor(&data, &mut cursor),
+            0x56
+        );
+        assert_eq!(cursor, 3);
+
+        assert_eq!(
+            BNO08x::<MockSensorInterface>::read_u8_at_cursor(&data, &mut cursor),
+            0x78
+        );
+        assert_eq!(cursor, 4);
+    }
+
+    #[test]
+    fn test_read_i16_at_cursor_positive() {
+        // Little-endian: 0x0102 stored as [0x02, 0x01]
+        let data = [0x02, 0x01, 0x00, 0x00];
+        let mut cursor = 0;
+
+        let value = BNO08x::<MockSensorInterface>::read_i16_at_cursor(&data, &mut cursor);
+        assert_eq!(value, 0x0102);
+        assert_eq!(cursor, 2);
+    }
+
+    #[test]
+    fn test_read_i16_at_cursor_negative() {
+        // -1 in little-endian: [0xFF, 0xFF]
+        let data = [0xFF, 0xFF, 0x00, 0x00];
+        let mut cursor = 0;
+
+        let value = BNO08x::<MockSensorInterface>::read_i16_at_cursor(&data, &mut cursor);
+        assert_eq!(value, -1);
+        assert_eq!(cursor, 2);
+    }
+
+    #[test]
+    fn test_read_i16_at_cursor_max_positive() {
+        // 32767 (0x7FFF) in little-endian: [0xFF, 0x7F]
+        let data = [0xFF, 0x7F, 0x00, 0x00];
+        let mut cursor = 0;
+
+        let value = BNO08x::<MockSensorInterface>::read_i16_at_cursor(&data, &mut cursor);
+        assert_eq!(value, i16::MAX);
+    }
+
+    #[test]
+    fn test_read_i16_at_cursor_min_negative() {
+        // -32768 (0x8000) in little-endian: [0x00, 0x80]
+        let data = [0x00, 0x80, 0x00, 0x00];
+        let mut cursor = 0;
+
+        let value = BNO08x::<MockSensorInterface>::read_i16_at_cursor(&data, &mut cursor);
+        assert_eq!(value, i16::MIN);
+    }
+
+    #[test]
+    fn test_try_read_i16_at_cursor_success() {
+        let data = [0x34, 0x12, 0x78, 0x56];
+        let mut cursor = 0;
+
+        let result = BNO08x::<MockSensorInterface>::try_read_i16_at_cursor(&data, &mut cursor);
+        assert_eq!(result, Some(0x1234));
+        assert_eq!(cursor, 2);
+
+        let result = BNO08x::<MockSensorInterface>::try_read_i16_at_cursor(&data, &mut cursor);
+        assert_eq!(result, Some(0x5678));
+        assert_eq!(cursor, 4);
+    }
+
+    #[test]
+    fn test_try_read_i16_at_cursor_insufficient_data() {
+        let data = [0x12];
+        let mut cursor = 0;
+
+        let result = BNO08x::<MockSensorInterface>::try_read_i16_at_cursor(&data, &mut cursor);
+        assert_eq!(result, None);
+        assert_eq!(cursor, 0); // cursor should not advance on failure
+    }
+
+    #[test]
+    fn test_try_read_i16_at_cursor_exactly_at_end() {
+        let data = [0x12, 0x34];
+        let mut cursor = 2;
+
+        let result = BNO08x::<MockSensorInterface>::try_read_i16_at_cursor(&data, &mut cursor);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_try_read_i16_at_cursor_one_byte_remaining() {
+        let data = [0x12, 0x34, 0x56];
+        let mut cursor = 2;
+
+        let result = BNO08x::<MockSensorInterface>::try_read_i16_at_cursor(&data, &mut cursor);
+        assert_eq!(result, None);
+    }
+
+    // ==========================================================================
+    // Input Report Parsing Tests
+    // ==========================================================================
+
+    #[test]
+    fn test_handle_one_input_report_full_data() {
+        // Simulated input report with all 5 data values
+        // Format: [report_id, seq_num, status, delay, data1_lo, data1_hi, ...]
+        #[rustfmt::skip]
+        let msg: [u8; 14] = [
+            0x01,       // report_id (accelerometer)
+            0x00,       // sequence number
+            0x00,       // status
+            0x00,       // delay
+            0x00, 0x01, // data1 = 256 (little-endian)
+            0x00, 0x02, // data2 = 512
+            0x00, 0x04, // data3 = 1024
+            0x00, 0x08, // data4 = 2048
+            0x00, 0x10, // data5 = 4096
+        ];
+
+        let (cursor, report_id, d1, d2, d3, d4, d5) =
+            BNO08x::<MockSensorInterface>::handle_one_input_report(0, &msg);
+
+        assert_eq!(report_id, SENSOR_REPORTID_ACCELEROMETER);
+        assert_eq!(d1, 256);
+        assert_eq!(d2, 512);
+        assert_eq!(d3, 1024);
+        assert_eq!(d4, 2048);
+        assert_eq!(d5, 4096);
+        assert_eq!(cursor, 14);
+    }
+
+    #[test]
+    fn test_handle_one_input_report_partial_data() {
+        // Report with only 3 data values (like accelerometer)
+        let msg: [u8; 10] = [
+            0x01, // report_id
+            0x01, // sequence number
+            0x02, // status
+            0x03, // delay
+            0x10, 0x00, // data1 = 16
+            0x20, 0x00, // data2 = 32
+            0x30, 0x00, // data3 = 48
+        ];
+
+        let (cursor, report_id, d1, d2, d3, d4, d5) =
+            BNO08x::<MockSensorInterface>::handle_one_input_report(0, &msg);
+
+        assert_eq!(report_id, SENSOR_REPORTID_ACCELEROMETER);
+        assert_eq!(d1, 16);
+        assert_eq!(d2, 32);
+        assert_eq!(d3, 48);
+        assert_eq!(d4, 0); // default when not enough data
+        assert_eq!(d5, 0); // default when not enough data
+        assert_eq!(cursor, 10);
+    }
+
+    #[test]
+    fn test_handle_one_input_report_with_offset() {
+        // Test that cursor offset works correctly
+        #[rustfmt::skip]
+        let msg: [u8; 16] = [
+            0xFF, 0xFF, // padding (2 bytes)
+            0x05,       // report_id (rotation vector)
+            0x00,       // sequence number
+            0x00,       // status
+            0x00,       // delay
+            0x01, 0x00, // data1
+            0x02, 0x00, // data2
+            0x03, 0x00, // data3
+            0x04, 0x00, // data4
+            0x05, 0x00, // data5
+        ];
+
+        let (cursor, report_id, d1, d2, d3, d4, d5) =
+            BNO08x::<MockSensorInterface>::handle_one_input_report(2, &msg);
+
+        assert_eq!(report_id, SENSOR_REPORTID_ROTATION_VECTOR);
+        assert_eq!(d1, 1);
+        assert_eq!(d2, 2);
+        assert_eq!(d3, 3);
+        assert_eq!(d4, 4);
+        assert_eq!(d5, 5);
+        assert_eq!(cursor, 16); // 2 + 14 bytes
+    }
+
+    // ==========================================================================
+    // BNO08x Constructor and State Tests
+    // ==========================================================================
+
+    #[test]
+    fn test_new_with_interface() {
+        let mock = MockSensorInterface::new();
+        let driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        // Verify initial state
+        assert!(!driver.device_reset);
+        assert!(!driver.prod_id_verified);
+        assert!(!driver.init_received);
+        assert!(!driver.advert_received);
+        assert!(!driver.error_list_received);
+        assert_eq!(driver.last_packet_len_received, 0);
+        assert_eq!(driver.sequence_numbers, [0; NUM_CHANNELS]);
+        assert_eq!(driver.accelerometer, [0.0; 3]);
+        assert_eq!(driver.rotation_quaternion, [0.0; 4]);
+        assert_eq!(driver.gyro, [0.0; 3]);
+    }
+
+    #[test]
+    fn test_free_returns_interface() {
+        let mock = MockSensorInterface::new();
+        let driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+        let _interface = driver.free();
+        // If this compiles and runs, the interface was returned successfully
+    }
+
+    // ==========================================================================
+    // Sensor Data Accessor Tests
+    // ==========================================================================
+
+    #[test]
+    fn test_accelerometer_accessor() {
+        let mock = MockSensorInterface::new();
+        let driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        let accel = driver.accelerometer().unwrap();
+        assert_eq!(accel, [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn test_rotation_quaternion_accessor() {
+        let mock = MockSensorInterface::new();
+        let driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        let quat = driver.rotation_quaternion().unwrap();
+        assert_eq!(quat, [0.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn test_rotation_acc_accessor() {
+        let mock = MockSensorInterface::new();
+        let driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        assert_eq!(driver.rotation_acc(), 0.0);
+    }
+
+    #[test]
+    fn test_game_rotation_quaternion_accessor() {
+        let mock = MockSensorInterface::new();
+        let driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        let quat = driver.game_rotation_quaternion().unwrap();
+        assert_eq!(quat, [0.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn test_geomag_rotation_quaternion_accessor() {
+        let mock = MockSensorInterface::new();
+        let driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        let quat = driver.geomag_rotation_quaternion().unwrap();
+        assert_eq!(quat, [0.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn test_geomag_rotation_acc_accessor() {
+        let mock = MockSensorInterface::new();
+        let driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        assert_eq!(driver.geomag_rotation_acc(), 0.0);
+    }
+
+    #[test]
+    fn test_linear_accel_accessor() {
+        let mock = MockSensorInterface::new();
+        let driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        let accel = driver.linear_accel().unwrap();
+        assert_eq!(accel, [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn test_gravity_accessor() {
+        let mock = MockSensorInterface::new();
+        let driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        let gravity = driver.gravity().unwrap();
+        assert_eq!(gravity, [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn test_gyro_accessor() {
+        let mock = MockSensorInterface::new();
+        let driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        let gyro = driver.gyro().unwrap();
+        assert_eq!(gyro, [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn test_gyro_uncalib_accessor() {
+        let mock = MockSensorInterface::new();
+        let driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        let gyro = driver.gyro_uncalib().unwrap();
+        assert_eq!(gyro, [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn test_mag_field_accessor() {
+        let mock = MockSensorInterface::new();
+        let driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        let mag = driver.mag_field().unwrap();
+        assert_eq!(mag, [0.0, 0.0, 0.0]);
+    }
+
+    // ==========================================================================
+    // Report State Tests
+    // ==========================================================================
+
+    #[test]
+    fn test_is_report_enabled_default() {
+        let mock = MockSensorInterface::new();
+        let driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        // All reports should be disabled by default
+        for i in 0..16 {
+            assert!(!driver.is_report_enabled(i));
+        }
+    }
+
+    #[test]
+    fn test_is_report_enabled_out_of_bounds() {
+        let mock = MockSensorInterface::new();
+        let driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        // Out of bounds should return false
+        assert!(!driver.is_report_enabled(255));
+    }
+
+    #[test]
+    fn test_report_update_time_default() {
+        let mock = MockSensorInterface::new();
+        let driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        // All update times should be 0 by default
+        for i in 0..16 {
+            assert_eq!(driver.report_update_time(i), 0);
+        }
+    }
+
+    #[test]
+    fn test_report_update_time_out_of_bounds() {
+        let mock = MockSensorInterface::new();
+        let driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        // Out of bounds should return 0
+        assert_eq!(driver.report_update_time(255), 0);
+    }
+
+    // ==========================================================================
+    // Packet Preparation Tests
+    // ==========================================================================
+
+    #[test]
+    fn test_prep_send_packet_basic() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        let body = [0x01, 0x02, 0x03];
+        let packet_len = driver.prep_send_packet(CHANNEL_HUB_CONTROL, &body);
+
+        // Packet length = header (4) + body (3) = 7
+        assert_eq!(packet_len, 7);
+
+        // Check header
+        assert_eq!(driver.packet_send_buf[0], 7); // LSB of length
+        assert_eq!(driver.packet_send_buf[1], 0); // MSB of length
+        assert_eq!(driver.packet_send_buf[2], CHANNEL_HUB_CONTROL);
+        assert_eq!(driver.packet_send_buf[3], 0); // sequence number (first packet)
+
+        // Check body
+        assert_eq!(driver.packet_send_buf[4], 0x01);
+        assert_eq!(driver.packet_send_buf[5], 0x02);
+        assert_eq!(driver.packet_send_buf[6], 0x03);
+    }
+
+    #[test]
+    fn test_prep_send_packet_sequence_increments() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        let body = [0x01];
+
+        // First packet
+        driver.prep_send_packet(CHANNEL_HUB_CONTROL, &body);
+        assert_eq!(driver.sequence_numbers[CHANNEL_HUB_CONTROL as usize], 1);
+
+        // Second packet
+        driver.prep_send_packet(CHANNEL_HUB_CONTROL, &body);
+        assert_eq!(driver.sequence_numbers[CHANNEL_HUB_CONTROL as usize], 2);
+
+        // Third packet
+        driver.prep_send_packet(CHANNEL_HUB_CONTROL, &body);
+        assert_eq!(driver.sequence_numbers[CHANNEL_HUB_CONTROL as usize], 3);
+    }
+
+    #[test]
+    fn test_prep_send_packet_different_channels() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        let body = [0x01];
+
+        // Send on different channels
+        driver.prep_send_packet(CHANNEL_COMMAND, &body);
+        driver.prep_send_packet(CHANNEL_HUB_CONTROL, &body);
+        driver.prep_send_packet(CHANNEL_EXECUTABLE, &body);
+
+        // Each channel should have its own sequence
+        assert_eq!(driver.sequence_numbers[CHANNEL_COMMAND as usize], 1);
+        assert_eq!(driver.sequence_numbers[CHANNEL_HUB_CONTROL as usize], 1);
+        assert_eq!(driver.sequence_numbers[CHANNEL_EXECUTABLE as usize], 1);
+    }
+
+    #[test]
+    fn test_prep_send_packet_large_body() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        // Create a 100-byte body
+        let body = [0xAB; 100];
+        let packet_len = driver.prep_send_packet(CHANNEL_HUB_CONTROL, &body);
+
+        assert_eq!(packet_len, 104); // 4 header + 100 body
+        assert_eq!(driver.packet_send_buf[0], 104); // LSB
+        assert_eq!(driver.packet_send_buf[1], 0); // MSB
+
+        // Verify body content
+        for i in 0..100 {
+            assert_eq!(driver.packet_send_buf[4 + i], 0xAB);
+        }
+    }
+
+    // ==========================================================================
+    // Sensor Update Method Tests
+    // ==========================================================================
+
+    #[test]
+    fn test_update_accelerometer() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        // Q8 format: 256 = 1.0 m/s^2
+        driver.update_accelerometer(256, 512, -256);
+
+        let accel = driver.accelerometer().unwrap();
+        assert!((accel[0] - 1.0).abs() < 0.01);
+        assert!((accel[1] - 2.0).abs() < 0.01);
+        assert!((accel[2] + 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_update_rotation_quaternion() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        // Q14 format: 16384 = 1.0
+        // Identity quaternion: [0, 0, 0, 1]
+        driver.update_rotation_quaternion(0, 0, 0, 16384, 0);
+
+        let quat = driver.rotation_quaternion().unwrap();
+        assert!(quat[0].abs() < 0.001);
+        assert!(quat[1].abs() < 0.001);
+        assert!(quat[2].abs() < 0.001);
+        assert!((quat[3] - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_update_rotation_quaternion_with_accuracy() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        // Q12 for accuracy: 4096 = 1.0 radian
+        driver.update_rotation_quaternion(0, 0, 0, 16384, 2048);
+
+        assert!((driver.rotation_acc() - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_update_rotation_quaternion_game() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        // Q14 format
+        driver.update_rotation_quaternion_game(8192, 0, 0, 8192);
+
+        let quat = driver.game_rotation_quaternion().unwrap();
+        assert!((quat[0] - 0.5).abs() < 0.001);
+        assert!(quat[1].abs() < 0.001);
+        assert!(quat[2].abs() < 0.001);
+        assert!((quat[3] - 0.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_update_rotation_quaternion_geomag() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        driver.update_rotation_quaternion_geomag(0, 0, 0, 16384, 4096);
+
+        let quat = driver.geomag_rotation_quaternion().unwrap();
+        assert!((quat[3] - 1.0).abs() < 0.001);
+        assert!((driver.geomag_rotation_acc() - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_update_linear_accel() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        // Q8 format
+        driver.update_linear_accel(128, 256, 512);
+
+        let accel = driver.linear_accel().unwrap();
+        assert!((accel[0] - 0.5).abs() < 0.01);
+        assert!((accel[1] - 1.0).abs() < 0.01);
+        assert!((accel[2] - 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_update_gravity() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        // Q8 format: ~9.8 m/s^2 = ~2509 in Q8
+        driver.update_gravity(0, 0, 2509);
+
+        let gravity = driver.gravity().unwrap();
+        assert!(gravity[0].abs() < 0.01);
+        assert!(gravity[1].abs() < 0.01);
+        assert!((gravity[2] - 9.8).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_update_gyro_calib() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        // Q9 format: 512 = 1.0 rad/s
+        driver.update_gyro_calib(512, -512, 256);
+
+        let gyro = driver.gyro().unwrap();
+        assert!((gyro[0] - 1.0).abs() < 0.01);
+        assert!((gyro[1] + 1.0).abs() < 0.01);
+        assert!((gyro[2] - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_update_gyro_uncalib() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        // Q9 format
+        driver.update_gyro_uncalib(256, 512, 768);
+
+        let gyro = driver.gyro_uncalib().unwrap();
+        assert!((gyro[0] - 0.5).abs() < 0.01);
+        assert!((gyro[1] - 1.0).abs() < 0.01);
+        assert!((gyro[2] - 1.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_update_magnetic_field_calib() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        // Q4 format: 16 = 1.0 µT
+        driver.update_magnetic_field_calib(160, 320, 480);
+
+        let mag = driver.mag_field().unwrap();
+        assert!((mag[0] - 10.0).abs() < 0.1);
+        assert!((mag[1] - 20.0).abs() < 0.1);
+        assert!((mag[2] - 30.0).abs() < 0.1);
+    }
 }
