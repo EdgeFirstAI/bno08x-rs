@@ -79,14 +79,26 @@ cd build && make  # Where are we now?
 
 ### #2: No System Python - Use venv
 
+**NEVER install pip packages outside of the local venv!** This includes `--user` installs.
+
 ```bash
-# ✅ Direct venv invocation
+# ✅ Direct venv invocation - ALWAYS use local venv
 venv/bin/python script.py
+venv/bin/pip install package-name
 venv/bin/pytest tests/
 
-# ❌ System Python pollution
+# ❌ FORBIDDEN - System Python pollution
 python script.py
+pip install package-name
+pip install package-name --user
+pip install package-name --break-system-packages  # NEVER!
 ```
+
+**Why?** System/user pip installs:
+- Pollute global environment
+- Cause version conflicts
+- Break reproducibility
+- May require `--break-system-packages` which damages the system
 
 ### #3: env.sh for Credentials (Optional)
 
@@ -97,16 +109,46 @@ export API_TOKEN="expires-in-24h"  # Ephemeral only!
 
 **Usage:** `[[ -f env.sh ]] && source env.sh`
 
+### #4: ALWAYS Use Makefile for Format and Lint
+
+```bash
+# ✅ MUST use Makefile targets (handles nightly fmt properly)
+make format
+make lint
+
+# ❌ NEVER run cargo fmt/clippy directly - inconsistent behavior
+cargo fmt --all           # Missing nightly fallback
+cargo clippy ...          # May miss flags
+```
+
+### #5: ALWAYS Use cargo-zigbuild for Cross-Compilation
+
+Cross-compiled binaries MUST be built with `cargo zigbuild` for manylinux2014 glibc compatibility with target devices.
+
+```bash
+# ✅ MUST use zigbuild for ARM64 cross-compilation
+cargo zigbuild --target aarch64-unknown-linux-gnu --release
+cargo zigbuild --target aarch64-unknown-linux-gnu --release --tests
+
+# ❌ NEVER use regular cargo for cross-compilation - glibc version mismatch
+cargo build --target aarch64-unknown-linux-gnu --release  # GLIBC_2.39 errors on target!
+```
+
+**Why?** Host glibc is newer than target device. zigbuild uses zig's bundled libc for consistent ABI.
+
 ---
 
 ## Build Commands
 
 ```bash
-# Build
+# Build (native)
 cargo build --release
 
-# Build for ARM64 cross-compilation (from x86 host)
-cargo build --target aarch64-unknown-linux-gnu --release
+# Build for ARM64 cross-compilation (MUST use zigbuild!)
+cargo zigbuild --target aarch64-unknown-linux-gnu --release
+
+# Build tests for ARM64 (for on-target testing)
+cargo zigbuild --target aarch64-unknown-linux-gnu --release --tests
 
 # Test (unit tests only - no hardware required)
 cargo test
@@ -114,9 +156,9 @@ cargo test
 # Test with coverage
 cargo llvm-cov nextest --all-features --workspace
 
-# Format/Lint
-cargo fmt --all
-cargo clippy --all-targets --all-features -- -D warnings
+# Format/Lint (MUST use Makefile!)
+make format
+make lint
 
 # Documentation
 cargo doc --all-features --no-deps
@@ -184,9 +226,9 @@ rustup target add aarch64-unknown-linux-gnu
 cargo llvm-cov nextest --profile profiling --cargo-profile profiling \
     --all-features --no-run
 
-# Or build without coverage for simple testing
-cargo build --target aarch64-unknown-linux-gnu --release
-cargo test --target aarch64-unknown-linux-gnu --no-run
+# Or build without coverage for simple testing (MUST use zigbuild!)
+cargo zigbuild --target aarch64-unknown-linux-gnu --release
+cargo zigbuild --target aarch64-unknown-linux-gnu --release --tests
 ```
 
 #### 2. Deploy to Target
@@ -339,17 +381,19 @@ For CI/CD, hardware testing follows the **three-phase pattern** (see SPS 11-cicd
 **Verify:**
 - APIs exist before using them
 - Licenses are approved
-- Linters pass (`cargo fmt && cargo clippy`)
+- Linters pass (`make format && make lint`)
 - Tests cover edge cases
 - Match existing code patterns
 
 **Avoid:**
 - Hallucinated APIs
 - GPL/AGPL dependencies
-- System Python
+- System Python (NEVER pip install outside venv!)
 - cd commands
 - Hardcoded secrets
 - Over-engineering simple solutions
+- Running cargo fmt/clippy directly (use Makefile!)
+- Using cargo build for cross-compilation (use zigbuild!)
 
 **Review:** ALL code. YOU are author (AI = tool). Test thoroughly.
 
@@ -366,8 +410,9 @@ For CI/CD, hardware testing follows the **three-phase pattern** (see SPS 11-cicd
 **Release:** Semver, make pre-release, wait CI, tag vX.Y.Z
 
 **Build:** `cargo build --release`
+**Cross-build:** `cargo zigbuild --target aarch64-unknown-linux-gnu --release`
 **Test:** `cargo test` (unit) | `cargo test -- --ignored` (hardware)
-**Lint:** `cargo fmt && cargo clippy -- -D warnings`
+**Lint:** `make format && make lint` (NEVER cargo fmt/clippy directly!)
 **Coverage:** `cargo llvm-cov nextest --all-features`
 
 ---

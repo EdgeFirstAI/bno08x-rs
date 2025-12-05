@@ -7,3 +7,8 @@ target*/
 build*/
 *-rs/
 *sbom.json
+
+sonar.py
+env.sh
+sonar-report.json
+TODO.md
