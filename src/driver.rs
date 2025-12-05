@@ -1216,7 +1216,7 @@ where
                     warn!("{:?}", e)
                 }
             }
-        };
+        }
 
         // process all incoming messages until we get a product id (or no more data)
         while !self.prod_id_verified {
