@@ -279,6 +279,35 @@ impl<SI> BNO08x<'_, SI> {
     }
 }
 
+/// Find a GPIO pin by its symbolic name across all GPIO chips.
+///
+/// This function searches through all available GPIO chips on the system
+/// and returns the chip path and line number for the first pin matching
+/// the given symbolic name.
+///
+/// # Arguments
+/// * `symbol` - The symbolic name to search for (e.g., "IMU_INT")
+///
+/// # Returns
+/// * `Ok(Some((chip_path, line_number)))` - If the pin was found
+/// * `Ok(None)` - If no pin with the given name was found
+/// * `Err(_)` - If there was an error accessing GPIO chips
+fn find_gpio_by_symbol(symbol: &str) -> io::Result<Option<(String, u32)>> {
+    let gpio_chips = gpiod::Chip::list_devices()?;
+
+    for entry in gpio_chips {
+        let chip = gpiod::Chip::new(&entry)?;
+        for i in 0..chip.num_lines() {
+            let line_info = chip.line_info(i)?;
+            trace!("--- {} ---", line_info.name);
+            if line_info.name == symbol {
+                return Ok(Some((entry.display().to_string(), i)));
+            }
+        }
+    }
+    Ok(None)
+}
+
 impl<'a> BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>> {
     /// Create a new BNO08x driver using SPI with explicit GPIO chip and pin
     /// numbers
@@ -338,43 +367,20 @@ impl<'a> BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>> {
         hintn_pin: &str,
         reset_pin: &str,
     ) -> io::Result<BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>>> {
-        let gpio_chips = gpiod::Chip::list_devices()?;
-        let mut hintn_gpio_chip = String::from("");
-        let mut hintn_num = 0;
-        let mut hintn_found = false;
-        let mut reset_gpio_chip = String::from("");
-        let mut reset_num = 0;
-        let mut reset_found = false;
-        'outer: for entry in gpio_chips {
-            let chip = gpiod::Chip::new(&entry)?;
-            for i in 0..chip.num_lines() {
-                if !hintn_found && chip.line_info(i)?.name == hintn_pin {
-                    hintn_gpio_chip = entry.display().to_string();
-                    hintn_num = i;
-                    hintn_found = true;
-                } else if !reset_found && chip.line_info(i)?.name == reset_pin {
-                    reset_gpio_chip = entry.display().to_string();
-                    reset_num = i;
-                    reset_found = true;
-                }
-                trace!("--- {} ---", chip.line_info(i)?.name);
-                if reset_found && hintn_found {
-                    break 'outer;
-                }
-            }
-        }
-        if !hintn_found {
-            return Err(Error::new(
+        let (hintn_gpio_chip, hintn_num) = find_gpio_by_symbol(hintn_pin)?.ok_or_else(|| {
+            Error::new(
                 ErrorKind::AddrNotAvailable,
                 format!("Did not find hintn pin \"{}\"", hintn_pin),
-            ));
-        }
-        if !reset_found {
-            return Err(Error::new(
+            )
+        })?;
+
+        let (reset_gpio_chip, reset_num) = find_gpio_by_symbol(reset_pin)?.ok_or_else(|| {
+            Error::new(
                 ErrorKind::AddrNotAvailable,
                 format!("Did not find reset pin \"{}\"", reset_pin),
-            ));
-        }
+            )
+        })?;
+
         Self::new_spi(
             spidevice,
             hintn_gpio_chip.as_str(),
