@@ -19,10 +19,6 @@ exclude = ["sonar-project.properties", ".github/"]
 name = "bno08x_rs"
 path = "src/lib.rs"
 
-[[bin]]
-name = "bno08x-rs"
-path = "src/main.rs"
-
 [features]
 default = []
 

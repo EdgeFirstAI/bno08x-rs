@@ -67,5 +67,5 @@ jobs:
       - name: Build library
         run: cargo build --release --lib
 
-      - name: Build binaries
-        run: cargo build --release --bins
+      - name: Build examples
+        run: cargo build --release --examples

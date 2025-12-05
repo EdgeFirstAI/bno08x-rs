@@ -65,8 +65,8 @@ cargo build --release
 The [Maivin platform](https://edgefirst.ai/maivin/) has pre-configured device tree settings for the IMU:
 
 ```bash
-# Run the demo binary
-cargo run --release
+# Run the demo example
+cargo run --example demo --release
 
 # Or use as a library in your application
 ```
@@ -205,10 +205,10 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed GPIO configuration guidance.
 
 ## Running the Demo
 
-The included binary demonstrates all sensor features:
+The included example demonstrates all sensor features:
 
 ```bash
-cargo run --release
+cargo run --example demo --release
 ```
 
 Output:
