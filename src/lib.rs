@@ -118,3 +118,80 @@ pub enum Error<CommE, PinE> {
     /// No data available from sensor (timeout waiting for HINTN)
     NoDataAvailable,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_error_comm_variant() {
+        let err: Error<&str, ()> = Error::Comm("SPI failure");
+        match err {
+            Error::Comm(msg) => assert_eq!(msg, "SPI failure"),
+            _ => panic!("Expected Comm variant"),
+        }
+    }
+
+    #[test]
+    fn test_error_pin_variant() {
+        let err: Error<(), &str> = Error::Pin("GPIO error");
+        match err {
+            Error::Pin(msg) => assert_eq!(msg, "GPIO error"),
+            _ => panic!("Expected Pin variant"),
+        }
+    }
+
+    #[test]
+    fn test_error_sensor_unresponsive() {
+        let err: Error<(), ()> = Error::SensorUnresponsive;
+        match err {
+            Error::SensorUnresponsive => {} // expected
+            _ => panic!("Expected SensorUnresponsive variant"),
+        }
+    }
+
+    #[test]
+    fn test_error_buffer_overflow() {
+        let err: Error<(), ()> = Error::BufferOverflow {
+            packet_size: 4096,
+            buffer_size: 2048,
+        };
+        match err {
+            Error::BufferOverflow {
+                packet_size,
+                buffer_size,
+            } => {
+                assert_eq!(packet_size, 4096);
+                assert_eq!(buffer_size, 2048);
+            }
+            _ => panic!("Expected BufferOverflow variant"),
+        }
+    }
+
+    #[test]
+    fn test_error_no_data_available() {
+        let err: Error<(), ()> = Error::NoDataAvailable;
+        match err {
+            Error::NoDataAvailable => {} // expected
+            _ => panic!("Expected NoDataAvailable variant"),
+        }
+    }
+
+    #[test]
+    fn test_error_debug_formatting() {
+        // Test that Debug is implemented and produces reasonable output
+        let comm_err: Error<&str, ()> = Error::Comm("test");
+        let debug_str = format!("{:?}", comm_err);
+        assert!(debug_str.contains("Comm"));
+        assert!(debug_str.contains("test"));
+
+        let overflow_err: Error<(), ()> = Error::BufferOverflow {
+            packet_size: 100,
+            buffer_size: 50,
+        };
+        let debug_str = format!("{:?}", overflow_err);
+        assert!(debug_str.contains("BufferOverflow"));
+        assert!(debug_str.contains("100"));
+        assert!(debug_str.contains("50"));
+    }
+}

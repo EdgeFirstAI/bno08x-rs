@@ -2063,4 +2063,577 @@ mod tests {
         assert!((mag[1] - 20.0).abs() < 0.1);
         assert!((mag[2] - 30.0).abs() < 0.1);
     }
+
+    // ==========================================================================
+    // Packet Handling Tests
+    // ==========================================================================
+
+    #[test]
+    fn test_handle_received_packet_too_short() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        // Packet shorter than header length should return error
+        let result = driver.handle_received_packet(2);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_handle_received_packet_clamped_to_buffer_size() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        // Initialize buffer with valid packet data that will be processed
+        // when clamped to buffer size
+        driver.packet_recv_buf[0] = 8;
+        driver.packet_recv_buf[1] = 0;
+        driver.packet_recv_buf[2] = CHANNEL_HUB_CONTROL;
+        driver.packet_recv_buf[3] = 0;
+        driver.packet_recv_buf[4] = SHUB_PROD_ID_RESP;
+        driver.packet_recv_buf[5] = 0;
+        driver.packet_recv_buf[6] = 1;
+        driver.packet_recv_buf[7] = 0;
+
+        // Packet larger than buffer - should be clamped
+        // The function should clamp to PACKET_RECV_BUF_LEN and process
+        let result = driver.handle_received_packet(PACKET_RECV_BUF_LEN + 100);
+        // Should succeed since we have valid data in the buffer
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_handle_received_packet_executable_channel_reset() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        // Simulate a reset complete response on executable channel
+        // Packet format: [len_lo, len_hi, channel, seq, report_id, ...]
+        driver.packet_recv_buf[0] = 5; // length low
+        driver.packet_recv_buf[1] = 0; // length high
+        driver.packet_recv_buf[2] = CHANNEL_EXECUTABLE; // channel
+        driver.packet_recv_buf[3] = 0; // sequence
+        driver.packet_recv_buf[4] = EXECUTABLE_DEVICE_RESP_RESET_COMPLETE;
+
+        assert!(!driver.device_reset);
+        let result = driver.handle_received_packet(5);
+        assert!(result.is_ok());
+        assert!(driver.device_reset);
+    }
+
+    #[test]
+    fn test_handle_received_packet_unknown_executable_report() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        driver.packet_recv_buf[0] = 5;
+        driver.packet_recv_buf[1] = 0;
+        driver.packet_recv_buf[2] = CHANNEL_EXECUTABLE;
+        driver.packet_recv_buf[3] = 0;
+        driver.packet_recv_buf[4] = 0xFF; // Unknown report ID
+
+        let result = driver.handle_received_packet(5);
+        assert!(result.is_err());
+        assert_eq!(driver.last_exec_chan_rid, 0xFF);
+    }
+
+    #[test]
+    fn test_handle_received_packet_unknown_channel() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        driver.packet_recv_buf[0] = 5;
+        driver.packet_recv_buf[1] = 0;
+        driver.packet_recv_buf[2] = 0xFE; // Unknown channel
+        driver.packet_recv_buf[3] = 0;
+        driver.packet_recv_buf[4] = 0x01;
+
+        let result = driver.handle_received_packet(5);
+        assert!(result.is_err());
+        assert_eq!(driver.last_chan_received, 0xFE);
+    }
+
+    #[test]
+    fn test_handle_received_packet_hub_control_init() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        // Simulate a command response with init
+        driver.packet_recv_buf[0] = 8;
+        driver.packet_recv_buf[1] = 0;
+        driver.packet_recv_buf[2] = CHANNEL_HUB_CONTROL;
+        driver.packet_recv_buf[3] = 0;
+        driver.packet_recv_buf[4] = SHUB_COMMAND_RESP;
+        driver.packet_recv_buf[5] = 0;
+        driver.packet_recv_buf[6] = SH2_INIT_SYSTEM;
+
+        assert!(!driver.init_received);
+        let result = driver.handle_received_packet(8);
+        assert!(result.is_ok());
+        assert!(driver.init_received);
+    }
+
+    #[test]
+    fn test_handle_received_packet_hub_control_prod_id() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        // Simulate product ID response
+        driver.packet_recv_buf[0] = 10;
+        driver.packet_recv_buf[1] = 0;
+        driver.packet_recv_buf[2] = CHANNEL_HUB_CONTROL;
+        driver.packet_recv_buf[3] = 0;
+        driver.packet_recv_buf[4] = SHUB_PROD_ID_RESP;
+        driver.packet_recv_buf[5] = 0; // reset cause
+        driver.packet_recv_buf[6] = 3; // sw version major
+        driver.packet_recv_buf[7] = 5; // sw version minor
+
+        assert!(!driver.prod_id_verified);
+        let result = driver.handle_received_packet(10);
+        assert!(result.is_ok());
+        assert!(driver.prod_id_verified);
+    }
+
+    #[test]
+    fn test_handle_received_packet_hub_control_feature_resp() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        // Simulate feature response for accelerometer
+        driver.packet_recv_buf[0] = 8;
+        driver.packet_recv_buf[1] = 0;
+        driver.packet_recv_buf[2] = CHANNEL_HUB_CONTROL;
+        driver.packet_recv_buf[3] = 0;
+        driver.packet_recv_buf[4] = SHUB_GET_FEATURE_RESP;
+        driver.packet_recv_buf[5] = SENSOR_REPORTID_ACCELEROMETER;
+
+        assert!(!driver.report_enabled[SENSOR_REPORTID_ACCELEROMETER as usize]);
+        let result = driver.handle_received_packet(8);
+        assert!(result.is_ok());
+        assert!(driver.report_enabled[SENSOR_REPORTID_ACCELEROMETER as usize]);
+    }
+
+    #[test]
+    fn test_handle_received_packet_hub_control_frs_write_resp() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        driver.packet_recv_buf[0] = 8;
+        driver.packet_recv_buf[1] = 0;
+        driver.packet_recv_buf[2] = CHANNEL_HUB_CONTROL;
+        driver.packet_recv_buf[3] = 0;
+        driver.packet_recv_buf[4] = SHUB_FRS_WRITE_RESP;
+        driver.packet_recv_buf[5] = FRS_STATUS_WRITE_READY;
+
+        let result = driver.handle_received_packet(8);
+        assert!(result.is_ok());
+        assert_eq!(driver.frs_write_status, FRS_STATUS_WRITE_READY);
+    }
+
+    #[test]
+    fn test_handle_received_packet_hub_control_unknown() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        driver.packet_recv_buf[0] = 8;
+        driver.packet_recv_buf[1] = 0;
+        driver.packet_recv_buf[2] = CHANNEL_HUB_CONTROL;
+        driver.packet_recv_buf[3] = 0;
+        driver.packet_recv_buf[4] = 0xFE; // Unknown report
+
+        let result = driver.handle_received_packet(8);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_handle_received_packet_command_channel_unknown() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        driver.packet_recv_buf[0] = 8;
+        driver.packet_recv_buf[1] = 0;
+        driver.packet_recv_buf[2] = CHANNEL_COMMAND;
+        driver.packet_recv_buf[3] = 0;
+        driver.packet_recv_buf[4] = 0xFE; // Unknown report
+
+        let result = driver.handle_received_packet(8);
+        assert!(result.is_err());
+        assert_eq!(driver.last_command_chan_rid, 0xFE);
+    }
+
+    // ==========================================================================
+    // Error List Handling Tests
+    // ==========================================================================
+
+    #[test]
+    fn test_handle_cmd_resp_error_list_empty() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        driver.packet_recv_buf[0] = 6;
+        driver.packet_recv_buf[1] = 0;
+        driver.packet_recv_buf[2] = CHANNEL_COMMAND;
+        driver.packet_recv_buf[3] = 0;
+        driver.packet_recv_buf[4] = CMD_RESP_ERROR_LIST;
+        driver.packet_recv_buf[5] = 0; // No errors
+
+        let result = driver.handle_received_packet(6);
+        assert!(result.is_ok());
+        assert!(driver.error_list_received);
+    }
+
+    #[test]
+    fn test_handle_cmd_resp_error_list_various_errors() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        // Test with multiple error codes
+        driver.packet_recv_buf[0] = 18;
+        driver.packet_recv_buf[1] = 0;
+        driver.packet_recv_buf[2] = CHANNEL_COMMAND;
+        driver.packet_recv_buf[3] = 0;
+        driver.packet_recv_buf[4] = CMD_RESP_ERROR_LIST;
+        // Error codes 0-12 and one unknown
+        for i in 0..13 {
+            driver.packet_recv_buf[5 + i] = i as u8;
+        }
+        driver.packet_recv_buf[18] = 0xFF; // Unknown error
+
+        let result = driver.handle_received_packet(18);
+        assert!(result.is_ok());
+        assert!(driver.error_list_received);
+    }
+
+    // ==========================================================================
+    // Sensor Reports Handling Tests
+    // ==========================================================================
+
+    #[test]
+    fn test_handle_sensor_reports_accelerometer() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        // Construct a sensor report packet for accelerometer
+        // Format: header (4 bytes) + timestamp (5 bytes) + report (10 bytes)
+        driver.packet_recv_buf[0] = 19; // length
+        driver.packet_recv_buf[1] = 0;
+        driver.packet_recv_buf[2] = CHANNEL_SENSOR_REPORTS;
+        driver.packet_recv_buf[3] = 0;
+        // Timestamp base (5 bytes)
+        driver.packet_recv_buf[4] = 0xFB; // time base report
+        driver.packet_recv_buf[5] = 0;
+        driver.packet_recv_buf[6] = 0;
+        driver.packet_recv_buf[7] = 0;
+        driver.packet_recv_buf[8] = 0;
+        // Accelerometer report
+        driver.packet_recv_buf[9] = SENSOR_REPORTID_ACCELEROMETER;
+        driver.packet_recv_buf[10] = 0; // seq
+        driver.packet_recv_buf[11] = 0; // status
+        driver.packet_recv_buf[12] = 0; // delay
+                                        // X = 256 (1.0 m/s² in Q8)
+        driver.packet_recv_buf[13] = 0x00;
+        driver.packet_recv_buf[14] = 0x01;
+        // Y = 512 (2.0 m/s² in Q8)
+        driver.packet_recv_buf[15] = 0x00;
+        driver.packet_recv_buf[16] = 0x02;
+        // Z = -256 (-1.0 m/s² in Q8)
+        driver.packet_recv_buf[17] = 0x00;
+        driver.packet_recv_buf[18] = 0xFF;
+
+        let result = driver.handle_received_packet(19);
+        assert!(result.is_ok());
+
+        let accel = driver.accelerometer().unwrap();
+        assert!((accel[0] - 1.0).abs() < 0.1);
+        assert!((accel[1] - 2.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_handle_sensor_reports_rotation_vector() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        // Construct rotation vector report
+        driver.packet_recv_buf[0] = 23; // length
+        driver.packet_recv_buf[1] = 0;
+        driver.packet_recv_buf[2] = CHANNEL_SENSOR_REPORTS;
+        driver.packet_recv_buf[3] = 0;
+        // Timestamp base
+        driver.packet_recv_buf[4] = 0xFB;
+        driver.packet_recv_buf[5..9].copy_from_slice(&[0, 0, 0, 0]);
+        // Rotation vector report (14 bytes: 4 header + 10 data)
+        driver.packet_recv_buf[9] = SENSOR_REPORTID_ROTATION_VECTOR;
+        driver.packet_recv_buf[10] = 0;
+        driver.packet_recv_buf[11] = 0;
+        driver.packet_recv_buf[12] = 0;
+        // i, j, k, real (Q14: 16384 = 1.0), accuracy
+        // Identity quaternion: [0, 0, 0, 1]
+        driver.packet_recv_buf[13..15].copy_from_slice(&0i16.to_le_bytes()); // i
+        driver.packet_recv_buf[15..17].copy_from_slice(&0i16.to_le_bytes()); // j
+        driver.packet_recv_buf[17..19].copy_from_slice(&0i16.to_le_bytes()); // k
+        driver.packet_recv_buf[19..21].copy_from_slice(&16384i16.to_le_bytes()); // real
+        driver.packet_recv_buf[21..23].copy_from_slice(&0i16.to_le_bytes()); // accuracy
+
+        let result = driver.handle_received_packet(23);
+        assert!(result.is_ok());
+
+        let quat = driver.rotation_quaternion().unwrap();
+        assert!((quat[3] - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_handle_sensor_reports_game_rotation() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        driver.packet_recv_buf[0] = 21;
+        driver.packet_recv_buf[1] = 0;
+        driver.packet_recv_buf[2] = CHANNEL_SENSOR_REPORTS;
+        driver.packet_recv_buf[3] = 0;
+        driver.packet_recv_buf[4] = 0xFB;
+        driver.packet_recv_buf[5..9].copy_from_slice(&[0, 0, 0, 0]);
+        driver.packet_recv_buf[9] = SENSOR_REPORTID_ROTATION_VECTOR_GAME;
+        driver.packet_recv_buf[10..13].copy_from_slice(&[0, 0, 0]);
+        // 45 degree rotation about Z: [0, 0, sin(22.5°), cos(22.5°)]
+        driver.packet_recv_buf[13..15].copy_from_slice(&0i16.to_le_bytes());
+        driver.packet_recv_buf[15..17].copy_from_slice(&0i16.to_le_bytes());
+        driver.packet_recv_buf[17..19].copy_from_slice(&6270i16.to_le_bytes()); // ~0.383 in Q14
+        driver.packet_recv_buf[19..21].copy_from_slice(&15137i16.to_le_bytes()); // ~0.924 in Q14
+
+        let result = driver.handle_received_packet(21);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_handle_sensor_reports_geomag_rotation() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        driver.packet_recv_buf[0] = 23;
+        driver.packet_recv_buf[1] = 0;
+        driver.packet_recv_buf[2] = CHANNEL_SENSOR_REPORTS;
+        driver.packet_recv_buf[3] = 0;
+        driver.packet_recv_buf[4] = 0xFB;
+        driver.packet_recv_buf[5..9].copy_from_slice(&[0, 0, 0, 0]);
+        driver.packet_recv_buf[9] = SENSOR_REPORTID_ROTATION_VECTOR_GEOMAGNETIC;
+        driver.packet_recv_buf[10..13].copy_from_slice(&[0, 0, 0]);
+        driver.packet_recv_buf[13..15].copy_from_slice(&0i16.to_le_bytes());
+        driver.packet_recv_buf[15..17].copy_from_slice(&0i16.to_le_bytes());
+        driver.packet_recv_buf[17..19].copy_from_slice(&0i16.to_le_bytes());
+        driver.packet_recv_buf[19..21].copy_from_slice(&16384i16.to_le_bytes());
+        driver.packet_recv_buf[21..23].copy_from_slice(&4096i16.to_le_bytes()); // accuracy
+
+        let result = driver.handle_received_packet(23);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_handle_sensor_reports_linear_accel() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        driver.packet_recv_buf[0] = 19;
+        driver.packet_recv_buf[1] = 0;
+        driver.packet_recv_buf[2] = CHANNEL_SENSOR_REPORTS;
+        driver.packet_recv_buf[3] = 0;
+        driver.packet_recv_buf[4] = 0xFB;
+        driver.packet_recv_buf[5..9].copy_from_slice(&[0, 0, 0, 0]);
+        driver.packet_recv_buf[9] = SENSOR_REPORTID_LINEAR_ACCEL;
+        driver.packet_recv_buf[10..13].copy_from_slice(&[0, 0, 0]);
+        driver.packet_recv_buf[13..15].copy_from_slice(&256i16.to_le_bytes());
+        driver.packet_recv_buf[15..17].copy_from_slice(&512i16.to_le_bytes());
+        driver.packet_recv_buf[17..19].copy_from_slice(&768i16.to_le_bytes());
+
+        let result = driver.handle_received_packet(19);
+        assert!(result.is_ok());
+
+        let accel = driver.linear_accel().unwrap();
+        assert!((accel[0] - 1.0).abs() < 0.1);
+        assert!((accel[1] - 2.0).abs() < 0.1);
+        assert!((accel[2] - 3.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_handle_sensor_reports_gravity() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        driver.packet_recv_buf[0] = 19;
+        driver.packet_recv_buf[1] = 0;
+        driver.packet_recv_buf[2] = CHANNEL_SENSOR_REPORTS;
+        driver.packet_recv_buf[3] = 0;
+        driver.packet_recv_buf[4] = 0xFB;
+        driver.packet_recv_buf[5..9].copy_from_slice(&[0, 0, 0, 0]);
+        driver.packet_recv_buf[9] = SENSOR_REPORTID_GRAVITY;
+        driver.packet_recv_buf[10..13].copy_from_slice(&[0, 0, 0]);
+        driver.packet_recv_buf[13..15].copy_from_slice(&0i16.to_le_bytes());
+        driver.packet_recv_buf[15..17].copy_from_slice(&0i16.to_le_bytes());
+        driver.packet_recv_buf[17..19].copy_from_slice(&2509i16.to_le_bytes()); // ~9.8 m/s²
+
+        let result = driver.handle_received_packet(19);
+        assert!(result.is_ok());
+
+        let gravity = driver.gravity().unwrap();
+        assert!((gravity[2] - 9.8).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_handle_sensor_reports_gyro() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        driver.packet_recv_buf[0] = 19;
+        driver.packet_recv_buf[1] = 0;
+        driver.packet_recv_buf[2] = CHANNEL_SENSOR_REPORTS;
+        driver.packet_recv_buf[3] = 0;
+        driver.packet_recv_buf[4] = 0xFB;
+        driver.packet_recv_buf[5..9].copy_from_slice(&[0, 0, 0, 0]);
+        driver.packet_recv_buf[9] = SENSOR_REPORTID_GYROSCOPE;
+        driver.packet_recv_buf[10..13].copy_from_slice(&[0, 0, 0]);
+        // Q9: 512 = 1.0 rad/s
+        driver.packet_recv_buf[13..15].copy_from_slice(&512i16.to_le_bytes());
+        driver.packet_recv_buf[15..17].copy_from_slice(&(-512i16).to_le_bytes());
+        driver.packet_recv_buf[17..19].copy_from_slice(&256i16.to_le_bytes());
+
+        let result = driver.handle_received_packet(19);
+        assert!(result.is_ok());
+
+        let gyro = driver.gyro().unwrap();
+        assert!((gyro[0] - 1.0).abs() < 0.1);
+        assert!((gyro[1] + 1.0).abs() < 0.1);
+        assert!((gyro[2] - 0.5).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_handle_sensor_reports_gyro_uncalib() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        driver.packet_recv_buf[0] = 19;
+        driver.packet_recv_buf[1] = 0;
+        driver.packet_recv_buf[2] = CHANNEL_SENSOR_REPORTS;
+        driver.packet_recv_buf[3] = 0;
+        driver.packet_recv_buf[4] = 0xFB;
+        driver.packet_recv_buf[5..9].copy_from_slice(&[0, 0, 0, 0]);
+        driver.packet_recv_buf[9] = SENSOR_REPORTID_GYROSCOPE_UNCALIB;
+        driver.packet_recv_buf[10..13].copy_from_slice(&[0, 0, 0]);
+        driver.packet_recv_buf[13..15].copy_from_slice(&256i16.to_le_bytes());
+        driver.packet_recv_buf[15..17].copy_from_slice(&512i16.to_le_bytes());
+        driver.packet_recv_buf[17..19].copy_from_slice(&768i16.to_le_bytes());
+
+        let result = driver.handle_received_packet(19);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_handle_sensor_reports_magnetometer() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        driver.packet_recv_buf[0] = 19;
+        driver.packet_recv_buf[1] = 0;
+        driver.packet_recv_buf[2] = CHANNEL_SENSOR_REPORTS;
+        driver.packet_recv_buf[3] = 0;
+        driver.packet_recv_buf[4] = 0xFB;
+        driver.packet_recv_buf[5..9].copy_from_slice(&[0, 0, 0, 0]);
+        driver.packet_recv_buf[9] = SENSOR_REPORTID_MAGNETIC_FIELD;
+        driver.packet_recv_buf[10..13].copy_from_slice(&[0, 0, 0]);
+        // Q4: 16 = 1.0 µT
+        driver.packet_recv_buf[13..15].copy_from_slice(&160i16.to_le_bytes()); // 10 µT
+        driver.packet_recv_buf[15..17].copy_from_slice(&320i16.to_le_bytes()); // 20 µT
+        driver.packet_recv_buf[17..19].copy_from_slice(&480i16.to_le_bytes()); // 30 µT
+
+        let result = driver.handle_received_packet(19);
+        assert!(result.is_ok());
+
+        let mag = driver.mag_field().unwrap();
+        assert!((mag[0] - 10.0).abs() < 0.5);
+        assert!((mag[1] - 20.0).abs() < 0.5);
+        assert!((mag[2] - 30.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn test_handle_sensor_reports_unknown_report_id() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        driver.packet_recv_buf[0] = 19;
+        driver.packet_recv_buf[1] = 0;
+        driver.packet_recv_buf[2] = CHANNEL_SENSOR_REPORTS;
+        driver.packet_recv_buf[3] = 0;
+        driver.packet_recv_buf[4] = 0xFB;
+        driver.packet_recv_buf[5..9].copy_from_slice(&[0, 0, 0, 0]);
+        driver.packet_recv_buf[9] = 0xFE; // Unknown report ID
+        driver.packet_recv_buf[10..19].copy_from_slice(&[0; 9]);
+
+        // Should not crash, just ignore the unknown report
+        let result = driver.handle_received_packet(19);
+        assert!(result.is_ok());
+    }
+
+    // ==========================================================================
+    // Advertisement Response Tests
+    // ==========================================================================
+
+    #[test]
+    fn test_handle_advertise_response() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        // Simulate advertisement response with 0xFF terminator
+        driver.packet_recv_buf[0] = 10;
+        driver.packet_recv_buf[1] = 0;
+        driver.packet_recv_buf[2] = CHANNEL_COMMAND;
+        driver.packet_recv_buf[3] = 0;
+        driver.packet_recv_buf[4] = CMD_RESP_ADVERTISEMENT;
+        // Advertisement entries (normally contain channel info)
+        driver.packet_recv_buf[5] = 0x00;
+        driver.packet_recv_buf[6] = 0xFF; // Terminator
+
+        assert!(!driver.advert_received);
+        let result = driver.handle_received_packet(10);
+        assert!(result.is_ok());
+        assert!(driver.advert_received);
+    }
+
+    // ==========================================================================
+    // Callback Tests
+    // ==========================================================================
+
+    #[test]
+    fn test_add_sensor_report_callback() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        let called = std::rc::Rc::new(std::cell::Cell::new(false));
+        let called_clone = called.clone();
+
+        driver.add_sensor_report_callback(
+            SENSOR_REPORTID_ACCELEROMETER,
+            "test".to_string(),
+            move |_driver| {
+                called_clone.set(true);
+            },
+        );
+
+        // Verify callback was added
+        assert!(!driver.report_update_callbacks[SENSOR_REPORTID_ACCELEROMETER as usize].is_empty());
+    }
+
+    #[test]
+    fn test_remove_sensor_report_callback() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        driver.add_sensor_report_callback(
+            SENSOR_REPORTID_ACCELEROMETER,
+            "test".to_string(),
+            |_| {},
+        );
+
+        assert!(!driver.report_update_callbacks[SENSOR_REPORTID_ACCELEROMETER as usize].is_empty());
+
+        driver.remove_sensor_report_callback(SENSOR_REPORTID_ACCELEROMETER, "test".to_string());
+
+        assert!(driver.report_update_callbacks[SENSOR_REPORTID_ACCELEROMETER as usize].is_empty());
+    }
 }
