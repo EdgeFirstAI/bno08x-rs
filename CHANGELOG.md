@@ -7,7 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.0.0] - Unreleased
+## [2.0.1] - 2025-12-22
+
+### Changed
+
+- Moved demo binary to examples directory
+- Refactored `new_spi_from_symbol()` to reduce cognitive complexity
+- Refactored `set_sensor_orientation()` to reduce cognitive complexity
+
+### Fixed
+
+- Improved error handling and fixed format/linting errors
+
+### Documentation
+
+- Added docs.rs links and crates.io badges to README
+
+### Testing
+
+- Improved unit test coverage for driver and GPIO modules
+- Improved test coverage with packet handling and error tests
+
+## [2.0.0] - 2025-12-04
 
 ### Breaking Changes
 
@@ -191,6 +212,7 @@ The following APIs remain unchanged and require no migration:
   - Error reporting and handling
   - Feature enable/disable commands
 
-[Unreleased]: https://github.com/EdgeFirstAI/bno08x-rs/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/EdgeFirstAI/bno08x-rs/compare/v2.0.1...HEAD
+[2.0.1]: https://github.com/EdgeFirstAI/bno08x-rs/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/EdgeFirstAI/bno08x-rs/compare/v1.0.1...v2.0.0
 [1.0.1]: https://github.com/EdgeFirstAI/bno08x-rs/releases/tag/v1.0.1
