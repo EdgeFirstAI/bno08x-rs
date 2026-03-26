@@ -33,7 +33,7 @@ impl SpiDevice {
         let mut spi = Spidev::open(path)?;
         let options = SpidevOptions::new()
             .bits_per_word(8)
-            .max_speed_hz(80_000)
+            .max_speed_hz(3_000_000) // max spi frequency for BNO085 is 3 MHz
             .mode(SpiModeFlags::SPI_MODE_3)
             .lsb_first(false)
             .build();
