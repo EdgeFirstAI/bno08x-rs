@@ -190,8 +190,6 @@ jobs:
     name: Hardware Integration Tests
     needs: test
     runs-on: raivin
-    # Only run on main branch or when explicitly requested via label
-    if: github.ref == 'refs/heads/main' || contains(github.event.pull_request.labels.*.name, 'test-hardware')
 
     steps:
       - name: Clean workspace (self-hosted runner)
