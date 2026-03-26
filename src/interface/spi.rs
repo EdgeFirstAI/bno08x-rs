@@ -6,15 +6,17 @@ use log::{error, trace};
 use super::SensorInterface;
 use crate::{
     interface::{
-        delay::delay_ms,
+        delay::{delay_ms, delay_us},
         gpio::{InputPin, OutputPin},
         spidev::{Transfer, Write},
         SensorCommon, PACKET_HEADER_LENGTH,
     },
-    Error,
-    Error::{BufferOverflow, NoDataAvailable, SensorUnresponsive},
+    Error::{self, BufferOverflow, NoDataAvailable, SensorUnresponsive},
 };
-use std::fmt::Debug;
+use std::{
+    fmt::Debug,
+    time::{Duration, Instant},
+};
 
 /// Encapsulates all the lines required to operate this sensor
 /// - SCK: clock line from master
@@ -66,31 +68,38 @@ where
         self.hintn.is_low().unwrap_or(false)
     }
 
-    /// Wait for sensor to be ready.
+    /// Wait for sensor to be ready after a reset.
     /// After reset this can take around 120 ms
     /// Return true if the sensor is awake, false if it doesn't wake up
     /// `max_ms` maximum milliseconds to await for HINTN change
     fn wait_for_sensor_awake(&mut self, max_ms: usize) -> bool {
-        for _ in 0..max_ms {
-            if self.hintn_signaled() {
+        let mut low_detected = false;
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_millis(max_ms as u64) {
+            if !self.hintn_signaled() {
+                low_detected = true;
+            }
+
+            if low_detected && self.hintn_signaled() {
                 return true;
             }
-            delay_ms(1);
+
+            delay_us(100);
         }
 
         false
     }
 
-    /// block on HINTN for n cycles
-    fn block_on_hintn(&mut self, max_cycles: usize) -> bool {
-        for _ in 0..max_cycles {
+    /// Return true if hintn was signaled within `max_ms` milliseconds, false
+    /// otherwise
+    fn block_on_hintn(&mut self, max_ms: usize) -> bool {
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_millis(max_ms as u64) {
             if self.hintn_signaled() {
                 return true;
             }
-            delay_ms(1);
+            delay_us(100);
         }
-
-        trace!("no hintn??");
 
         false
     }
@@ -116,13 +125,12 @@ where
         // Deselect sensor
         // self.csn.set_high().map_err(Error::Pin)?;
         // Note: This assumes that WAK/PS0 is set to high already
-        //TODO allow the user to provide a WAK pin
-        // should already be high by default, but just in case...
+
         self.reset.set_high().map_err(Error::Pin)?;
 
         trace!("reset cycle... ");
         // reset cycle
-
+        delay_ms(2);
         self.reset.set_low().map_err(Error::Pin)?;
         delay_ms(2);
         self.reset.set_high().map_err(Error::Pin)?;
@@ -141,22 +149,32 @@ where
         send_buf: &[u8],
         recv_buf: &mut [u8],
     ) -> Result<usize, Self::SensorError> {
-        //zero the receive buffer
-        for i in recv_buf[..].iter_mut() {
-            *i = 0;
+        if send_buf.len() > recv_buf.len() {
+            error!(
+                "Send buffer length ({}) greater than receive buffer length ({})",
+                send_buf.len(),
+                recv_buf.len()
+            );
+            return Err(BufferOverflow {
+                packet_size: send_buf.len(),
+                buffer_size: recv_buf.len(),
+            });
         }
 
-        let tmp = &mut [0u8; PACKET_HEADER_LENGTH];
+        //zero the receive buffer
+        recv_buf.fill(0);
+
         // According to diagram, does not have PS0/WAKE pin connected to GPIO, so we
         // will need to wait for hintn pin to write. https://au-zone.atlassian.net/browse/TOP2-188
         // MVN2-300000 R00A GNSS-IMU Schematics.PDF
 
         self.block_on_hintn(100);
+
         // check how long the message to read is
         let mut read_packet_len = 0;
-        let rc = self.spi.transfer(&mut tmp[..]);
+        let rc = self.spi.transfer(&mut recv_buf[..PACKET_HEADER_LENGTH]);
         if rc.is_ok() {
-            read_packet_len = SensorCommon::parse_packet_header(&tmp[..PACKET_HEADER_LENGTH]);
+            read_packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
         }
 
         // Copy the write message into the buffer
@@ -192,26 +210,24 @@ where
 
     /// Read a complete packet from the sensor
     fn read_packet(&mut self, recv_buf: &mut [u8]) -> Result<usize, Self::SensorError> {
-        if !self.block_on_hintn(1000) {
+        // check how long the message to read is
+        let mut read_packet_len = 0;
+        recv_buf[..PACKET_HEADER_LENGTH].fill(0);
+
+        if !self.block_on_hintn(100) {
             error!("No message to read - HINTN timeout");
             return Err(NoDataAvailable);
         }
         // As soon as host selects CSN, HINTN resets
 
-        // check how long the message to read is
-        let mut read_packet_len = 0;
-        for i in recv_buf[..PACKET_HEADER_LENGTH].iter_mut() {
-            *i = 0;
-        }
         let rc = self.spi.transfer(&mut recv_buf[..PACKET_HEADER_LENGTH]);
         if rc.is_ok() {
             read_packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
         }
 
         //zero the receive buffer
-        for i in recv_buf[..read_packet_len].iter_mut() {
-            *i = 0;
-        }
+        recv_buf[..read_packet_len].fill(0);
+
         self.block_on_hintn(10);
         let rc = self.spi.transfer(&mut recv_buf[..read_packet_len]);
         if rc.is_ok() {
@@ -230,7 +246,7 @@ where
         recv_buf: &mut [u8],
         max_ms: usize,
     ) -> Result<usize, Self::SensorError> {
-        if self.wait_for_sensor_awake(max_ms) {
+        if self.block_on_hintn(max_ms) {
             return self.read_packet(recv_buf);
         }
         // trace!("Sensor did not wake for read");

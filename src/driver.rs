@@ -70,7 +70,7 @@ use crate::{
         FRS_TYPE_SENSOR_ORIENTATION,
     },
     interface::{
-        delay::delay_ms,
+        delay::{delay_ms, delay_us},
         gpio::{GpiodIn, GpiodOut},
         spi::SpiControlLines,
         spidev::SpiDevice,
@@ -406,7 +406,7 @@ where
             if msg_count == 0 {
                 break;
             }
-            delay_ms(1);
+            delay_us(100);
         }
     }
 
@@ -446,7 +446,7 @@ where
                 break;
             } else {
                 total_handled += handled_count;
-                delay_ms(1);
+                delay_us(100);
             }
             i += 1
         }
@@ -492,7 +492,7 @@ where
                 break;
             } else {
                 total_handled += handled_count;
-                delay_ms(1);
+                delay_us(100);
             }
         }
         total_handled
@@ -920,13 +920,13 @@ where
 
         // Section 5.1.1.1: On system startup, the SHTP control application will send
         // its full advertisement response, unsolicited, to the host.
-        delay_ms(1);
+        delay_us(100);
         self.sensor_interface
             .setup()
             .map_err(DriverError::CommError)?;
 
         if self.sensor_interface.requires_soft_reset() {
-            delay_ms(1);
+            delay_us(100);
             self.soft_reset()?;
             delay_ms(250);
             self.eat_all_messages();
@@ -935,11 +935,10 @@ where
         } else {
             // we only expect two messages after reset:
             // eat the advertisement response
-            delay_ms(250);
             trace!("Eating advertisement response");
             self.handle_one_message(20);
             trace!("Eating reset response");
-            delay_ms(250);
+            delay_us(100);
             self.handle_one_message(20);
         }
         self.verify_product_id()?;
@@ -1258,7 +1257,7 @@ where
         // process all incoming messages until we get a product id (or no more data)
         while !self.prod_id_verified {
             trace!("read PID");
-            let msg_count = self.handle_one_message(150);
+            let msg_count = self.handle_one_message(300);
             if msg_count < 1 {
                 break;
             }
