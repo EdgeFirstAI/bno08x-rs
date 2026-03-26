@@ -1340,7 +1340,8 @@ where
         Ok(())
     }
 
-    /// Send a packet and receive the response
+    /// Send a packet and receive a packet simultaneously, returning the length
+    /// of the received packet.
     fn send_and_receive_packet(
         &mut self,
         channel: u8,
