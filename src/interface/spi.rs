@@ -98,6 +98,11 @@ where
             if self.hintn_signaled() {
                 return true;
             }
+
+            // Datasheet (1.2.4.1 Responding to H_INTN) recommends responding to hintn
+            // within 1/10th of the fastest requested sensor report. The bno08x
+            // can do 400 Hz, so that's 250 us. We check a bit more frequently
+            // to be safe
             delay_us(100);
         }
 
@@ -164,14 +169,18 @@ where
         //zero the receive buffer
         recv_buf.fill(0);
 
-        // According to diagram, does not have PS0/WAKE pin connected to GPIO, so we
-        // will need to wait for hintn pin to write. https://au-zone.atlassian.net/browse/TOP2-188
-        // MVN2-300000 R00A GNSS-IMU Schematics.PDF
-
-        self.block_on_hintn(100);
-
         // check how long the message to read is
         let mut read_packet_len = 0;
+
+        // According to diagram, does not have PS0/WAKE pin connected to GPIO, so we
+        // will need to wait for hintn pin to write and cannot use the WAKE pin
+        // to indicate we want to write. https://au-zone.atlassian.net/browse/TOP2-188
+        // MVN2-300000 R00A GNSS-IMU Schematics.PDF
+        if !self.block_on_hintn(100) {
+            error!("No message to read - HINTN timeout");
+            return Err(NoDataAvailable);
+        }
+
         let rc = self.spi.transfer(&mut recv_buf[..PACKET_HEADER_LENGTH]);
         if rc.is_ok() {
             read_packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
@@ -191,7 +200,12 @@ where
                 buffer_size: recv_buf.len(),
             });
         }
-        self.block_on_hintn(10);
+
+        if !self.block_on_hintn(10) {
+            error!("No message to read - HINTN timeout");
+            return Err(NoDataAvailable);
+        }
+
         let rc = self.spi.transfer(&mut recv_buf[..total_packet_len]);
         if rc.is_ok() {
             read_packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
@@ -228,7 +242,11 @@ where
         //zero the receive buffer
         recv_buf[..read_packet_len].fill(0);
 
-        self.block_on_hintn(10);
+        if !self.block_on_hintn(10) {
+            error!("No message to read - HINTN timeout");
+            return Err(NoDataAvailable);
+        }
+
         let rc = self.spi.transfer(&mut recv_buf[..read_packet_len]);
         if rc.is_ok() {
             read_packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
