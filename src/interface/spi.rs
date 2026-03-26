@@ -147,6 +147,11 @@ where
         }
 
         let tmp = &mut [0u8; PACKET_HEADER_LENGTH];
+        // According to diagram, does not have PS0/WAKE pin connected to GPIO, so we
+        // will need to wait for hintn pin to write. https://au-zone.atlassian.net/browse/TOP2-188
+        // MVN2-300000 R00A GNSS-IMU Schematics.PDF
+
+        self.block_on_hintn(100);
         // check how long the message to read is
         let mut read_packet_len = 0;
         let rc = self.spi.transfer(&mut tmp[..]);
@@ -168,7 +173,7 @@ where
                 buffer_size: recv_buf.len(),
             });
         }
-        delay_ms(5);
+        self.block_on_hintn(10);
         let rc = self.spi.transfer(&mut recv_buf[..total_packet_len]);
         if rc.is_ok() {
             read_packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
@@ -207,7 +212,7 @@ where
         for i in recv_buf[..read_packet_len].iter_mut() {
             *i = 0;
         }
-        delay_ms(5);
+        self.block_on_hintn(10);
         let rc = self.spi.transfer(&mut recv_buf[..read_packet_len]);
         if rc.is_ok() {
             read_packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
