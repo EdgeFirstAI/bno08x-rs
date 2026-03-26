@@ -6,7 +6,7 @@ extern crate spidev;
 use log::trace;
 use spidev::{SpiModeFlags, Spidev, SpidevOptions, SpidevTransfer};
 
-use std::{io, path::Path, vec};
+use std::{io, path::Path};
 /// Blocking transfer
 pub trait Transfer {
     /// Error type
@@ -40,7 +40,7 @@ impl SpiDevice {
             .build();
         spi.configure(&options)?;
 
-        let tmp = vec![0_u8; 2048];
+        let tmp = Vec::with_capacity(2048);
         Ok(SpiDevice { spi, tmp })
     }
 }
