@@ -15,7 +15,7 @@ use crate::{
 };
 use std::{
     fmt::Debug,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 /// Encapsulates all the lines required to operate this sensor
@@ -99,14 +99,30 @@ where
                 return true;
             }
 
-            // Datasheet (1.2.4.1 Responding to H_INTN) recommends responding to hintn
-            // within 1/10th of the fastest requested sensor report. The bno08x
-            // can do 400 Hz, so that's 250 us. We check a bit more frequently
-            // to be safe
+            // Datasheet (1.2.4.1 Responding to H_INTN) recommends responding to
+            // hintn within 1/10th of the fastest requested sensor
+            // report. The bno08x can do 400 Hz, so that's 250 us.
+            // We check a bit more frequently to be safe
             delay_us(100);
         }
 
         false
+    }
+
+    /// Similar to block_on_hintn but without a timeout. Returns true if hintn
+    /// was signaled, false if the hintn event stream was disconnected
+    /// This function can block forever if the sensor never signals hintn, so
+    /// use with caution
+    fn block_on_hintn_no_limit(&mut self) -> bool {
+        loop {
+            if self.hintn_signaled() {
+                return true;
+            }
+            if let Err(evt) = self.hintn.read_event() {
+                error!("Error waiting for HINTN event: {:?}", evt);
+                return false;
+            }
+        }
     }
 }
 
@@ -201,7 +217,7 @@ where
             });
         }
 
-        if !self.block_on_hintn(10) {
+        if !self.block_on_hintn(100) {
             error!("No message to read - HINTN timeout");
             return Err(NoDataAvailable);
         }
@@ -228,8 +244,8 @@ where
         let mut read_packet_len = 0;
         recv_buf[..PACKET_HEADER_LENGTH].fill(0);
 
-        if !self.block_on_hintn(100) {
-            error!("No message to read - HINTN timeout");
+        if !self.block_on_hintn_no_limit() {
+            error!("No message to read - HINTN Err");
             return Err(NoDataAvailable);
         }
         // As soon as host selects CSN, HINTN resets
@@ -242,8 +258,8 @@ where
         //zero the receive buffer
         recv_buf[..read_packet_len].fill(0);
 
-        if !self.block_on_hintn(10) {
-            error!("No message to read - HINTN timeout");
+        if !self.block_on_hintn_no_limit() {
+            error!("No message to read - HINTN Err");
             return Err(NoDataAvailable);
         }
 
@@ -263,11 +279,12 @@ where
         &mut self,
         recv_buf: &mut [u8],
         max_ms: usize,
-    ) -> Result<usize, Self::SensorError> {
+    ) -> Result<(usize, SystemTime), Self::SensorError> {
         if self.block_on_hintn(max_ms) {
-            return self.read_packet(recv_buf);
+            let timestamp = SystemTime::now();
+            return Ok((self.read_packet(recv_buf)?, timestamp));
         }
         // trace!("Sensor did not wake for read");
-        Ok(0)
+        Ok((0, SystemTime::now()))
     }
 }

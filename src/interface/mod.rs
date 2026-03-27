@@ -26,6 +26,7 @@ pub mod spi;
 pub mod spidev;
 
 use core::ops::Shl;
+use std::time::SystemTime;
 
 /// Trait for sensor communication interfaces.
 ///
@@ -61,7 +62,7 @@ pub trait SensorInterface {
         &mut self,
         recv_buf: &mut [u8],
         max_ms: usize,
-    ) -> Result<usize, Self::SensorError>;
+    ) -> Result<(usize, SystemTime), Self::SensorError>;
 
     /// Send a packet and immediately read the response.
     fn send_and_receive_packet(

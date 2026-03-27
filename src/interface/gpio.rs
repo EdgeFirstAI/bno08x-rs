@@ -3,7 +3,7 @@
 
 // extern crate gpiod;
 use ::std::ops::Not;
-use gpiod::{Chip, Input, Lines, Options, Output};
+use gpiod::{Chip, Event, Input, Lines, Options, Output};
 use std::io;
 pub enum PinState {
     /// Low pin state
@@ -69,6 +69,9 @@ pub trait InputPin {
 
     /// Is the input pin low?
     fn is_low(&self) -> Result<bool, Self::Error>;
+
+    /// read events
+    fn read_event(&mut self) -> Result<Event, Self::Error>;
 }
 
 pub struct GpiodOut {
@@ -106,6 +109,7 @@ pub struct GpiodIn {
 impl GpiodIn {
     pub fn new(chip: &Chip, pin: u32) -> io::Result<GpiodIn> {
         let opts = Options::input([pin]) // configure lines offsets
+            .edge(gpiod::EdgeDetect::Both)
             .consumer("imu-driver"); // optionally set consumer string
 
         Ok(GpiodIn {
@@ -128,10 +132,19 @@ impl InputPin for GpiodIn {
         let values = self.input.get_values([false])?;
         Ok(!values[0])
     }
+
+    /// Read events
+    fn read_event(&mut self) -> Result<Event, Self::Error> {
+        self.input.read_event()
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use gpiod::Edge;
+
     use super::*;
 
     // ==========================================================================
@@ -326,6 +339,18 @@ mod tests {
                 return Err(MockInputError);
             }
             Ok(!self.high)
+        }
+
+        fn read_event(&mut self) -> Result<Event, Self::Error> {
+            if self.error_on_read {
+                return Err(MockInputError);
+            }
+            // Return a dummy event for testing
+            Ok(Event {
+                line: 0,
+                edge: Edge::Falling,
+                time: Duration::from_millis(0),
+            })
         }
     }
 

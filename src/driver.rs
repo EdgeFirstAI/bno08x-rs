@@ -492,7 +492,6 @@ where
                 break;
             } else {
                 total_handled += handled_count;
-                delay_us(100);
             }
         }
         total_handled
@@ -503,10 +502,10 @@ where
         let mut msg_count = 0;
 
         let res = self.receive_packet_with_timeout(max_ms);
-        if let Ok(received_len) = res {
+        if let Ok((received_len, timestamp)) = res {
             if received_len > 0 {
                 msg_count += 1;
-                if let Err(e) = self.handle_received_packet(received_len) {
+                if let Err(e) = self.handle_received_packet(received_len, timestamp) {
                     warn!("{:?}", e)
                 }
             }
@@ -520,7 +519,7 @@ where
     /// Receive and ignore one message, returning the packet size or zero
     pub fn eat_one_message(&mut self) -> usize {
         let res = self.receive_packet_with_timeout(150);
-        if let Ok(received_len) = res {
+        if let Ok((received_len, _)) = res {
             received_len
         } else {
             trace!("e1 err {:?}", res);
@@ -596,7 +595,7 @@ where
     }
 
     /// Handle parsing of an input report packet (may contain multiple reports)
-    fn handle_sensor_reports(&mut self, received_len: usize) {
+    fn handle_sensor_reports(&mut self, received_len: usize, timestamp: SystemTime) {
         let mut outer_cursor: usize = PACKET_HEADER_LENGTH + 5; // skip header, timestamp
         if received_len < outer_cursor {
             return;
@@ -616,7 +615,7 @@ where
                 Self::handle_one_input_report(outer_cursor, &self.packet_recv_buf[..received_len]);
             outer_cursor = inner_cursor;
 
-            let timestamp = SystemTime::now()
+            let timestamp = timestamp
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .map(|d| d.as_nanos())
                 .unwrap_or(0);
@@ -798,7 +797,11 @@ where
     }
 
     /// Handle a received packet and dispatch to appropriate handler
-    pub fn handle_received_packet(&mut self, received_len: usize) -> Result<(), Box<dyn Debug>> {
+    pub fn handle_received_packet(
+        &mut self,
+        received_len: usize,
+        timestamp: SystemTime,
+    ) -> Result<(), Box<dyn Debug>> {
         let mut rec_len = received_len;
         if rec_len > PACKET_RECV_BUF_LEN {
             warn!(
@@ -881,7 +884,7 @@ where
                 }
             },
             CHANNEL_SENSOR_REPORTS => {
-                self.handle_sensor_reports(rec_len);
+                self.handle_sensor_reports(rec_len, timestamp);
             }
             _ => {
                 self.last_chan_received = chan_num;
@@ -1060,9 +1063,9 @@ where
 
         let start = Instant::now();
         while !self.report_enabled[report_id as usize] && start.elapsed().as_millis() < 2000 {
-            if let Ok(received_len) = self.receive_packet_with_timeout(250) {
+            if let Ok((received_len, timestamp)) = self.receive_packet_with_timeout(250) {
                 if received_len > 0 {
-                    if let Err(e) = self.handle_received_packet(received_len) {
+                    if let Err(e) = self.handle_received_packet(received_len, timestamp) {
                         warn!("{:?}", e)
                     }
                 }
@@ -1091,9 +1094,9 @@ where
         while self.frs_write_status == FRS_STATUS_NO_DATA
             && start.elapsed().as_millis() < timeout_ms
         {
-            if let Ok(received_len) = self.receive_packet_with_timeout(250) {
+            if let Ok((received_len, timestamp)) = self.receive_packet_with_timeout(250) {
                 if received_len > 0 {
-                    if let Err(e) = self.handle_received_packet(received_len) {
+                    if let Err(e) = self.handle_received_packet(received_len, timestamp) {
                         warn!("{:?}", e)
                     }
                 }
@@ -1114,9 +1117,9 @@ where
             && self.frs_write_status != FRS_STATUS_WRITE_COMPLETE
             && start.elapsed().as_millis() < timeout_ms
         {
-            if let Ok(received_len) = self.receive_packet_with_timeout(250) {
+            if let Ok((received_len, timestamp)) = self.receive_packet_with_timeout(250) {
                 if received_len > 0 {
-                    if let Err(e) = self.handle_received_packet(received_len) {
+                    if let Err(e) = self.handle_received_packet(received_len, timestamp) {
                         warn!("{:?}", e)
                     }
                 }
@@ -1218,7 +1221,7 @@ where
             )
             .map_err(DriverError::CommError)?;
         if rc > 0 {
-            if let Err(e) = self.handle_received_packet(rc) {
+            if let Err(e) = self.handle_received_packet(rc, SystemTime::now()) {
                 warn!("{:?}", e)
             }
         }
@@ -1229,17 +1232,17 @@ where
     pub(crate) fn receive_packet_with_timeout(
         &mut self,
         max_ms: usize,
-    ) -> Result<usize, DriverError<SE>> {
+    ) -> Result<(usize, SystemTime), DriverError<SE>> {
         self.packet_recv_buf[0] = 0;
         self.packet_recv_buf[1] = 0;
-        let packet_len = self
+        let (packet_len, timestamp) = self
             .sensor_interface
             .read_with_timeout(&mut self.packet_recv_buf, max_ms)
             .map_err(DriverError::CommError)?;
 
         self.last_packet_len_received = packet_len;
 
-        Ok(packet_len)
+        Ok((packet_len, timestamp))
     }
 
     /// Verify that the sensor returns an expected chip ID
@@ -1258,7 +1261,7 @@ where
             let response_size =
                 self.send_and_receive_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref())?;
             if response_size > 0 {
-                if let Err(e) = self.handle_received_packet(response_size) {
+                if let Err(e) = self.handle_received_packet(response_size, SystemTime::now()) {
                     warn!("{:?}", e)
                 }
             }
@@ -1343,7 +1346,7 @@ where
         let data: [u8; 1] = [EXECUTABLE_DEVICE_CMD_RESET];
         let received_len = self.send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
         if received_len > 0 {
-            if let Err(e) = self.handle_received_packet(received_len) {
+            if let Err(e) = self.handle_received_packet(received_len, SystemTime::now()) {
                 warn!("{:?}", e)
             }
         }
@@ -1414,8 +1417,8 @@ mod tests {
             &mut self,
             _recv_buf: &mut [u8],
             _max_ms: usize,
-        ) -> Result<usize, Self::SensorError> {
-            Ok(0)
+        ) -> Result<(usize, SystemTime), Self::SensorError> {
+            Ok((0, SystemTime::now()))
         }
 
         fn send_and_receive_packet(
@@ -2084,7 +2087,7 @@ mod tests {
         let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
 
         // Packet shorter than header length should return error
-        let result = driver.handle_received_packet(2);
+        let result = driver.handle_received_packet(2, SystemTime::now());
         assert!(result.is_err());
     }
 
@@ -2106,7 +2109,7 @@ mod tests {
 
         // Packet larger than buffer - should be clamped
         // The function should clamp to PACKET_RECV_BUF_LEN and process
-        let result = driver.handle_received_packet(PACKET_RECV_BUF_LEN + 100);
+        let result = driver.handle_received_packet(PACKET_RECV_BUF_LEN + 100, SystemTime::now());
         // Should succeed since we have valid data in the buffer
         assert!(result.is_ok());
     }
@@ -2125,7 +2128,7 @@ mod tests {
         driver.packet_recv_buf[4] = EXECUTABLE_DEVICE_RESP_RESET_COMPLETE;
 
         assert!(!driver.device_reset);
-        let result = driver.handle_received_packet(5);
+        let result = driver.handle_received_packet(5, SystemTime::now());
         assert!(result.is_ok());
         assert!(driver.device_reset);
     }
@@ -2141,7 +2144,7 @@ mod tests {
         driver.packet_recv_buf[3] = 0;
         driver.packet_recv_buf[4] = 0xFF; // Unknown report ID
 
-        let result = driver.handle_received_packet(5);
+        let result = driver.handle_received_packet(5, SystemTime::now());
         assert!(result.is_err());
         assert_eq!(driver.last_exec_chan_rid, 0xFF);
     }
@@ -2157,7 +2160,7 @@ mod tests {
         driver.packet_recv_buf[3] = 0;
         driver.packet_recv_buf[4] = 0x01;
 
-        let result = driver.handle_received_packet(5);
+        let result = driver.handle_received_packet(5, SystemTime::now());
         assert!(result.is_err());
         assert_eq!(driver.last_chan_received, 0xFE);
     }
@@ -2177,7 +2180,7 @@ mod tests {
         driver.packet_recv_buf[6] = SH2_INIT_SYSTEM;
 
         assert!(!driver.init_received);
-        let result = driver.handle_received_packet(8);
+        let result = driver.handle_received_packet(8, SystemTime::now());
         assert!(result.is_ok());
         assert!(driver.init_received);
     }
@@ -2198,7 +2201,7 @@ mod tests {
         driver.packet_recv_buf[7] = 5; // sw version minor
 
         assert!(!driver.prod_id_verified);
-        let result = driver.handle_received_packet(10);
+        let result = driver.handle_received_packet(10, SystemTime::now());
         assert!(result.is_ok());
         assert!(driver.prod_id_verified);
     }
@@ -2217,7 +2220,7 @@ mod tests {
         driver.packet_recv_buf[5] = SENSOR_REPORTID_ACCELEROMETER;
 
         assert!(!driver.report_enabled[SENSOR_REPORTID_ACCELEROMETER as usize]);
-        let result = driver.handle_received_packet(8);
+        let result = driver.handle_received_packet(8, SystemTime::now());
         assert!(result.is_ok());
         assert!(driver.report_enabled[SENSOR_REPORTID_ACCELEROMETER as usize]);
     }
@@ -2234,7 +2237,7 @@ mod tests {
         driver.packet_recv_buf[4] = SHUB_FRS_WRITE_RESP;
         driver.packet_recv_buf[5] = FRS_STATUS_WRITE_READY;
 
-        let result = driver.handle_received_packet(8);
+        let result = driver.handle_received_packet(8, SystemTime::now());
         assert!(result.is_ok());
         assert_eq!(driver.frs_write_status, FRS_STATUS_WRITE_READY);
     }
@@ -2250,7 +2253,7 @@ mod tests {
         driver.packet_recv_buf[3] = 0;
         driver.packet_recv_buf[4] = 0xFE; // Unknown report
 
-        let result = driver.handle_received_packet(8);
+        let result = driver.handle_received_packet(8, SystemTime::now());
         assert!(result.is_err());
     }
 
@@ -2265,7 +2268,7 @@ mod tests {
         driver.packet_recv_buf[3] = 0;
         driver.packet_recv_buf[4] = 0xFE; // Unknown report
 
-        let result = driver.handle_received_packet(8);
+        let result = driver.handle_received_packet(8, SystemTime::now());
         assert!(result.is_err());
         assert_eq!(driver.last_command_chan_rid, 0xFE);
     }
@@ -2286,7 +2289,7 @@ mod tests {
         driver.packet_recv_buf[4] = CMD_RESP_ERROR_LIST;
         driver.packet_recv_buf[5] = 0; // No errors
 
-        let result = driver.handle_received_packet(6);
+        let result = driver.handle_received_packet(6, SystemTime::now());
         assert!(result.is_ok());
         assert!(driver.error_list_received);
     }
@@ -2308,7 +2311,7 @@ mod tests {
         }
         driver.packet_recv_buf[18] = 0xFF; // Unknown error
 
-        let result = driver.handle_received_packet(18);
+        let result = driver.handle_received_packet(18, SystemTime::now());
         assert!(result.is_ok());
         assert!(driver.error_list_received);
     }
@@ -2349,7 +2352,7 @@ mod tests {
         driver.packet_recv_buf[17] = 0x00;
         driver.packet_recv_buf[18] = 0xFF;
 
-        let result = driver.handle_received_packet(19);
+        let result = driver.handle_received_packet(19, SystemTime::now());
         assert!(result.is_ok());
 
         let accel = driver.accelerometer().unwrap();
@@ -2383,7 +2386,7 @@ mod tests {
         driver.packet_recv_buf[19..21].copy_from_slice(&16384i16.to_le_bytes()); // real
         driver.packet_recv_buf[21..23].copy_from_slice(&0i16.to_le_bytes()); // accuracy
 
-        let result = driver.handle_received_packet(23);
+        let result = driver.handle_received_packet(23, SystemTime::now());
         assert!(result.is_ok());
 
         let quat = driver.rotation_quaternion().unwrap();
@@ -2409,7 +2412,7 @@ mod tests {
         driver.packet_recv_buf[17..19].copy_from_slice(&6270i16.to_le_bytes()); // ~0.383 in Q14
         driver.packet_recv_buf[19..21].copy_from_slice(&15137i16.to_le_bytes()); // ~0.924 in Q14
 
-        let result = driver.handle_received_packet(21);
+        let result = driver.handle_received_packet(21, SystemTime::now());
         assert!(result.is_ok());
     }
 
@@ -2432,7 +2435,7 @@ mod tests {
         driver.packet_recv_buf[19..21].copy_from_slice(&16384i16.to_le_bytes());
         driver.packet_recv_buf[21..23].copy_from_slice(&4096i16.to_le_bytes()); // accuracy
 
-        let result = driver.handle_received_packet(23);
+        let result = driver.handle_received_packet(23, SystemTime::now());
         assert!(result.is_ok());
     }
 
@@ -2453,7 +2456,7 @@ mod tests {
         driver.packet_recv_buf[15..17].copy_from_slice(&512i16.to_le_bytes());
         driver.packet_recv_buf[17..19].copy_from_slice(&768i16.to_le_bytes());
 
-        let result = driver.handle_received_packet(19);
+        let result = driver.handle_received_packet(19, SystemTime::now());
         assert!(result.is_ok());
 
         let accel = driver.linear_accel().unwrap();
@@ -2479,7 +2482,7 @@ mod tests {
         driver.packet_recv_buf[15..17].copy_from_slice(&0i16.to_le_bytes());
         driver.packet_recv_buf[17..19].copy_from_slice(&2509i16.to_le_bytes()); // ~9.8 m/s²
 
-        let result = driver.handle_received_packet(19);
+        let result = driver.handle_received_packet(19, SystemTime::now());
         assert!(result.is_ok());
 
         let gravity = driver.gravity().unwrap();
@@ -2504,7 +2507,7 @@ mod tests {
         driver.packet_recv_buf[15..17].copy_from_slice(&(-512i16).to_le_bytes());
         driver.packet_recv_buf[17..19].copy_from_slice(&256i16.to_le_bytes());
 
-        let result = driver.handle_received_packet(19);
+        let result = driver.handle_received_packet(19, SystemTime::now());
         assert!(result.is_ok());
 
         let gyro = driver.gyro().unwrap();
@@ -2530,7 +2533,7 @@ mod tests {
         driver.packet_recv_buf[15..17].copy_from_slice(&512i16.to_le_bytes());
         driver.packet_recv_buf[17..19].copy_from_slice(&768i16.to_le_bytes());
 
-        let result = driver.handle_received_packet(19);
+        let result = driver.handle_received_packet(19, SystemTime::now());
         assert!(result.is_ok());
     }
 
@@ -2552,7 +2555,7 @@ mod tests {
         driver.packet_recv_buf[15..17].copy_from_slice(&320i16.to_le_bytes()); // 20 µT
         driver.packet_recv_buf[17..19].copy_from_slice(&480i16.to_le_bytes()); // 30 µT
 
-        let result = driver.handle_received_packet(19);
+        let result = driver.handle_received_packet(19, SystemTime::now());
         assert!(result.is_ok());
 
         let mag = driver.mag_field().unwrap();
@@ -2576,7 +2579,7 @@ mod tests {
         driver.packet_recv_buf[10..19].copy_from_slice(&[0; 9]);
 
         // Should not crash, just ignore the unknown report
-        let result = driver.handle_received_packet(19);
+        let result = driver.handle_received_packet(19, SystemTime::now());
         assert!(result.is_ok());
     }
 
@@ -2600,7 +2603,7 @@ mod tests {
         driver.packet_recv_buf[6] = 0xFF; // Terminator
 
         assert!(!driver.advert_received);
-        let result = driver.handle_received_packet(10);
+        let result = driver.handle_received_packet(10, SystemTime::now());
         assert!(result.is_ok());
         assert!(driver.advert_received);
     }
