@@ -1024,9 +1024,19 @@ where
         report_id: u8,
         millis_between_reports: u16,
     ) -> Result<bool, DriverError<SE>> {
+        self.enable_report_us(report_id, (millis_between_reports as u32) * 1000)
+    }
+
+    /// Enable a sensor report with the specified update interval.
+    ///
+    /// Returns true if the report was successfully enabled.
+    pub fn enable_report_us(
+        &mut self,
+        report_id: u8,
+        micros_between_reports: u32,
+    ) -> Result<bool, DriverError<SE>> {
         trace!("enable_report 0x{:X}", report_id);
 
-        let micros_between_reports: u32 = (millis_between_reports as u32) * 1000;
         let cmd_body: [u8; 17] = [
             SHUB_REPORT_SET_FEATURE_CMD,
             report_id,
