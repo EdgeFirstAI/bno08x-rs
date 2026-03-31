@@ -1,7 +1,6 @@
 // Copyright 2025 Au-Zone Technologies Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use gpiocdev::line::EdgeKind;
 use log::{error, trace};
 
 use super::SensorInterface;
@@ -9,7 +8,7 @@ use crate::{
     interface::{
         delay::delay_ms,
         gpio::{InputPin, OutputPin},
-        spidev::{Transfer, Write},
+        spidev::{Read, Transfer, Write},
         SensorCommon, PACKET_HEADER_LENGTH,
     },
     Error::{self, BufferOverflow, NoDataAvailable, SensorUnresponsive},
@@ -45,7 +44,7 @@ pub struct SpiInterface<SPI, /* CSN, */ IN, RSTN> {
 
 impl<SPI, /* CSN, */ IN, RSTN, CommE, PinE> SpiInterface<SPI, /* CSN, */ IN, RSTN>
 where
-    SPI: Write<Error = CommE> + Transfer<Error = CommE>,
+    SPI: Write<Error = CommE> + Transfer<Error = CommE> + Read<Error = CommE>,
     // CSN: OutputPin<Error = PinE>,
     IN: InputPin<Error = PinE>,
     RSTN: OutputPin<Error = PinE>,
@@ -97,8 +96,8 @@ where
         }
         let deadline = Instant::now() + Duration::from_millis(max_ms as u64);
         while let Some(rem) = deadline.checked_duration_since(Instant::now()) {
-            if let Some(evt) = self.hintn.read_event_with_timeout(rem).unwrap() {
-                if evt.kind == EdgeKind::Falling {
+            if self.hintn.read_event_with_timeout(rem).unwrap().is_some() {
+                if self.hintn_signaled() {
                     return true;
                 }
             } else {
@@ -117,19 +116,52 @@ where
             return true;
         }
         loop {
-            if let Ok(evt) = self.hintn.read_event() {
-                if evt.kind == EdgeKind::Falling {
-                    return true;
-                }
+            if self.hintn.read_event().is_ok() && self.hintn_signaled() {
+                return true;
             }
         }
+    }
+
+    /// Assumes hintn has already been waited on and signaled, attempts to read
+    /// a packet immediately without waiting for hintn again.
+    fn read_packet_immediately(
+        &mut self,
+        recv_buf: &mut [u8],
+    ) -> Result<usize, Error<CommE, PinE>> {
+        // check how long the message to read is
+        let mut read_packet_len = 0;
+        recv_buf[..PACKET_HEADER_LENGTH].fill(0);
+
+        let rc = self.spi.read(&mut recv_buf[..PACKET_HEADER_LENGTH]);
+        if rc.is_ok() {
+            read_packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
+        }
+
+        //zero the receive buffer
+        recv_buf[..read_packet_len].fill(0);
+
+        if !self.block_on_hintn_no_limit() {
+            error!("No message to read - HINTN Err");
+            return Err(NoDataAvailable);
+        }
+
+        let rc = self.spi.read(&mut recv_buf[..read_packet_len]);
+        if rc.is_ok() {
+            read_packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
+        }
+
+        if read_packet_len > 0 {
+            self.received_packet_count += 1;
+        }
+
+        Ok(read_packet_len)
     }
 }
 
 impl<SPI, /* CSN, */ IN, RS, CommE, PinE> SensorInterface
     for SpiInterface<SPI, /* CSN, */ IN, RS>
 where
-    SPI: Write<Error = CommE> + Transfer<Error = CommE>,
+    SPI: Write<Error = CommE> + Transfer<Error = CommE> + Read<Error = CommE>,
     // CSN: OutputPin<Error = PinE>,
     IN: InputPin<Error = PinE>,
     RS: OutputPin<Error = PinE>,
@@ -240,38 +272,11 @@ where
 
     /// Read a complete packet from the sensor
     fn read_packet(&mut self, recv_buf: &mut [u8]) -> Result<usize, Self::SensorError> {
-        // check how long the message to read is
-        let mut read_packet_len = 0;
-        recv_buf[..PACKET_HEADER_LENGTH].fill(0);
-
         if !self.block_on_hintn_no_limit() {
             error!("No message to read - HINTN Err");
             return Err(NoDataAvailable);
         }
-
-        let rc = self.spi.transfer(&mut recv_buf[..PACKET_HEADER_LENGTH]);
-        if rc.is_ok() {
-            read_packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
-        }
-
-        //zero the receive buffer
-        recv_buf[..read_packet_len].fill(0);
-
-        if !self.block_on_hintn_no_limit() {
-            error!("No message to read - HINTN Err");
-            return Err(NoDataAvailable);
-        }
-
-        let rc = self.spi.transfer(&mut recv_buf[..read_packet_len]);
-        if rc.is_ok() {
-            read_packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
-        }
-
-        if read_packet_len > 0 {
-            self.received_packet_count += 1;
-        }
-
-        Ok(read_packet_len)
+        self.read_packet_immediately(recv_buf)
     }
 
     fn read_with_timeout(
@@ -281,7 +286,7 @@ where
     ) -> Result<(usize, SystemTime), Self::SensorError> {
         if self.block_on_hintn(max_ms) {
             let timestamp = SystemTime::now();
-            return Ok((self.read_packet(recv_buf)?, timestamp));
+            return Ok((self.read_packet_immediately(recv_buf)?, timestamp));
         }
         // trace!("Sensor did not wake for read");
         Ok((0, SystemTime::now()))

@@ -230,7 +230,8 @@ pub struct BNO08x<'a, SI> {
     /// Which reports are enabled
     report_enabled: [bool; 16],
 
-    /// Timestamp of last update for each report
+    /// Timestamp of last update for each report, as nanoseconds since UNIX
+    /// epoch
     report_update_time: [u128; 16],
 
     /// Callbacks for report updates
@@ -955,7 +956,8 @@ where
         self.enable_report(SENSOR_REPORTID_GRAVITY, millis_between_reports)
     }
 
-    /// Get the timestamp of the last update for a report
+    /// Get the timestamp of the last update for a report, as nanoseconds since
+    /// UNIX epoch.
     pub fn report_update_time(&self, report_id: u8) -> u128 {
         if report_id as usize <= self.report_enabled.len() {
             return self.report_update_time[report_id as usize];

@@ -25,6 +25,15 @@ pub trait Write {
     fn write(&mut self, words: &[u8]) -> Result<(), Self::Error>;
 }
 
+/// Blocking Read
+pub trait Read {
+    /// Error type
+    type Error;
+
+    /// Reads `words` from the slave, ignoring all the outgoing words
+    fn read(&mut self, words: &mut [u8]) -> Result<(), Self::Error>;
+}
+
 pub struct SpiDevice {
     spi: Spidev,
     tmp: Vec<u8>,
@@ -51,9 +60,8 @@ impl Transfer for SpiDevice {
     fn transfer<'a>(&'a mut self, words: &'a mut [u8]) -> Result<&'a [u8], Self::Error> {
         self.tmp.resize(words.len(), 0);
         trace!("Transfer write: {:?}", words);
-        let mut transfer = SpidevTransfer::read_write(words, &mut self.tmp);
+        let mut transfer = SpidevTransfer::read_write_in_place(words);
         self.spi.transfer(&mut transfer)?;
-        words.clone_from_slice(&self.tmp);
         trace!("Transfer read: {:?}", words);
         Ok(words)
     }
@@ -64,10 +72,19 @@ impl Write for SpiDevice {
 
     fn write(&mut self, words: &[u8]) -> Result<(), Self::Error> {
         trace!("Write: {:?}", words);
-        self.tmp.resize(words.len(), 0);
-        let mut transfer = SpidevTransfer::read_write(words, &mut self.tmp);
+        let mut transfer = SpidevTransfer::write(words);
         self.spi.transfer(&mut transfer)?;
-        trace!("Write read: {:?}", &self.tmp);
+        Ok(())
+    }
+}
+
+impl Read for SpiDevice {
+    type Error = io::Error;
+
+    fn read(&mut self, words: &mut [u8]) -> Result<(), Self::Error> {
+        trace!("Read: {:?}", words);
+        let mut transfer = SpidevTransfer::read(words);
+        self.spi.transfer(&mut transfer)?;
         Ok(())
     }
 }

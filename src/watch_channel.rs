@@ -121,6 +121,12 @@ impl<T: Clone + PartialEq> Receiver<T> {
     /// value.
     pub fn recv(&self) -> Result<T, RecvError> {
         loop {
+            // Check if all senders are gone
+            let num_senders = *self.shared.num_senders.lock().expect("Mutex poisoned");
+            if num_senders == 0 {
+                return Err(RecvError::Disconnected);
+            }
+
             let old_value = self.shared.value.lock().expect("Mutex poisoned").clone();
 
             let guard = self.shared.value.lock().expect("Mutex poisoned");
@@ -134,12 +140,6 @@ impl<T: Clone + PartialEq> Receiver<T> {
             if new_value != old_value {
                 return Ok(new_value);
             }
-
-            // Check if all senders are gone
-            let num_senders = *self.shared.num_senders.lock().expect("Mutex poisoned");
-            if num_senders == 0 {
-                return Err(RecvError::Disconnected);
-            }
         }
     }
 
@@ -152,6 +152,12 @@ impl<T: Clone + PartialEq> Receiver<T> {
         let start = std::time::Instant::now();
 
         loop {
+            // Check if all senders are gone
+            let num_senders = *self.shared.num_senders.lock().expect("Mutex poisoned");
+            if num_senders == 0 {
+                return Err(RecvError::Disconnected);
+            }
+
             let old_value = self.shared.value.lock().expect("Mutex poisoned").clone();
             let elapsed = start.elapsed();
 
@@ -179,12 +185,6 @@ impl<T: Clone + PartialEq> Receiver<T> {
             // If timeout occurred, return error
             if wait_result.timed_out() {
                 return Err(RecvError::Timeout);
-            }
-
-            // Check if all senders are gone
-            let num_senders = *self.shared.num_senders.lock().expect("Mutex poisoned");
-            if num_senders == 0 {
-                return Err(RecvError::Disconnected);
             }
 
             // Otherwise loop to wait again (spurious wakeup or multiple
@@ -335,7 +335,10 @@ mod tests {
         assert_eq!(rx.recv(), Ok(99));
         handle.join().unwrap();
 
-        // Now sender is gone, next recv should see disconnected
+        // Drop the original sender so num_senders reaches 0
+        drop(tx);
+
+        // Now all senders are gone, next recv should see disconnected
         assert_eq!(rx.recv(), Err(RecvError::Disconnected));
     }
 

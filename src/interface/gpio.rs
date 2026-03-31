@@ -77,7 +77,7 @@ pub trait InputPin {
     /// read events
     fn read_event(&mut self) -> Result<EdgeEvent, Self::Error>;
 
-    /// read events
+    /// read events, returns Ok(None) on timeout
     fn read_event_with_timeout(
         &mut self,
         timeout: std::time::Duration,
