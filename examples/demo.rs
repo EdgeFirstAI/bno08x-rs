@@ -5,7 +5,7 @@ use bno08x_rs::{
     interface::delay::delay_ms, BNO08x, SENSOR_REPORTID_ACCELEROMETER, SENSOR_REPORTID_GYROSCOPE,
     SENSOR_REPORTID_MAGNETIC_FIELD, SENSOR_REPORTID_ROTATION_VECTOR,
 };
-use std::{f32::consts::PI, io};
+use std::{f32::consts::PI, io, time::Instant};
 
 const RAD_TO_DEG: f32 = 180f32 / PI;
 
@@ -58,15 +58,16 @@ fn print_info(qat: [f32; 4], a: [f32; 3], g: [f32; 3], m: [f32; 3], ts: u128) {
     println!("{}", update);
 }
 
-fn main() -> io::Result<()> {
+#[tokio::main]
+async fn main() -> gpiocdev::Result<()> {
     let mut imu_driver = BNO08x::new_spi_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
 
-    imu_driver.init().unwrap();
+    imu_driver.init().await.unwrap();
 
     let max_tries = 5;
 
     let reports = [
-        (SENSOR_REPORTID_ROTATION_VECTOR, 10),
+        (SENSOR_REPORTID_ROTATION_VECTOR, 4),
         (SENSOR_REPORTID_ACCELEROMETER, 10),
         (SENSOR_REPORTID_GYROSCOPE, 10),
         (SENSOR_REPORTID_MAGNETIC_FIELD, 10),
@@ -75,7 +76,7 @@ fn main() -> io::Result<()> {
     for (r, t) in reports {
         let mut i = 0;
         while i < max_tries && !imu_driver.is_report_enabled(r) {
-            imu_driver.enable_report(r, t).unwrap();
+            imu_driver.enable_report(r, t).await.unwrap();
             i += 1;
         }
 
@@ -84,7 +85,7 @@ fn main() -> io::Result<()> {
             return Ok(());
         }
         println!("Report {} is enabled", r);
-        delay_ms(100);
+        delay_ms(100).await;
     }
 
     let (tx, rx) = std::sync::mpsc::channel();
@@ -92,8 +93,16 @@ fn main() -> io::Result<()> {
     std::thread::Builder::new()
         .name("print_info".to_string())
         .spawn(move || {
+            let mut count = 0;
+            let mut last_ts = Instant::now();
             for (qat, a, g, m, ts) in rx {
-                print_info(qat, a, g, m, ts);
+                // print_info(qat, a, g, m, ts);
+                count += 1;
+                if count >= 100 {
+                    println!("FPS: {:?}", 100.0 / last_ts.elapsed().as_secs_f32());
+                    last_ts = Instant::now();
+                    count = 0;
+                }
             }
         })
         .unwrap();
@@ -110,7 +119,7 @@ fn main() -> io::Result<()> {
             tx.send((qat, a, g, m, ts)).unwrap();
         },
     );
-    let msg_count = imu_driver.handle_all_messages(150);
+    let msg_count = imu_driver.handle_all_messages(150).await;
     print!(
         "Program exited after handling {} msgs due to IMU not responding for over 150ms",
         msg_count

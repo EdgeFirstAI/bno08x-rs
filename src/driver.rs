@@ -372,9 +372,9 @@ where
     ///
     /// This is useful for clearing the message queue before starting
     /// a new measurement sequence.
-    pub fn eat_all_messages(&mut self) {
+    pub async fn eat_all_messages(&mut self) {
         loop {
-            let msg_count = self.eat_one_message();
+            let msg_count = self.eat_one_message().await;
             if msg_count == 0 {
                 break;
             }
@@ -408,11 +408,11 @@ where
     ///     Ok(())
     /// }
     /// ```
-    pub fn handle_messages(&mut self, timeout_ms: usize, max_count: u32) -> u32 {
+    pub async fn handle_messages(&mut self, timeout_ms: usize, max_count: u32) -> u32 {
         let mut total_handled: u32 = 0;
         let mut i: u32 = 0;
         while i < max_count {
-            let handled_count = self.handle_one_message(timeout_ms);
+            let handled_count = self.handle_one_message(timeout_ms).await;
             if handled_count == 0 || total_handled > max_count {
                 break;
             } else {
@@ -454,10 +454,10 @@ where
     ///     }
     /// }
     /// ```
-    pub fn handle_all_messages(&mut self, timeout_ms: usize) -> u32 {
+    pub async fn handle_all_messages(&mut self, timeout_ms: usize) -> u32 {
         let mut total_handled: u32 = 0;
         loop {
-            let handled_count = self.handle_one_message(timeout_ms);
+            let handled_count = self.handle_one_message(timeout_ms).await;
             if handled_count == 0 {
                 break;
             } else {
@@ -468,10 +468,10 @@ where
     }
 
     /// Handle one message and return the count of messages handled (0 or 1)
-    pub fn handle_one_message(&mut self, max_ms: usize) -> u32 {
+    pub async fn handle_one_message(&mut self, max_ms: usize) -> u32 {
         let mut msg_count = 0;
 
-        let res = self.receive_packet_with_timeout(max_ms);
+        let res = self.receive_packet_with_timeout(max_ms).await;
         if let Ok((received_len, timestamp)) = res {
             if received_len > 0 {
                 msg_count += 1;
@@ -487,8 +487,8 @@ where
     }
 
     /// Receive and ignore one message, returning the packet size or zero
-    pub fn eat_one_message(&mut self) -> usize {
-        let res = self.receive_packet_with_timeout(150);
+    pub async fn eat_one_message(&mut self) -> usize {
+        let res = self.receive_packet_with_timeout(150).await;
         if let Ok((received_len, _)) = res {
             received_len
         } else {
@@ -888,33 +888,34 @@ where
     /// imu.init().expect("Failed to initialize IMU");
     /// # Ok::<(), std::io::Error>(())
     /// ```
-    pub fn init(&mut self) -> Result<(), DriverError<SE>> {
+    pub async fn init(&mut self) -> Result<(), DriverError<SE>> {
         trace!("driver init");
 
         // Section 5.1.1.1: On system startup, the SHTP control application will send
         // its full advertisement response, unsolicited, to the host.
-        delay_us(100);
+        delay_us(100).await;
         self.sensor_interface
             .setup()
+            .await
             .map_err(DriverError::CommError)?;
 
         if self.sensor_interface.requires_soft_reset() {
-            delay_us(100);
-            self.soft_reset()?;
-            delay_ms(250);
-            self.eat_all_messages();
-            delay_ms(250);
-            self.eat_all_messages();
+            delay_us(100).await;
+            self.soft_reset();
+            delay_ms(250).await;
+            self.eat_all_messages().await;
+            delay_ms(250).await;
+            self.eat_all_messages().await;
         } else {
             // we only expect two messages after reset:
             // eat the advertisement response
             trace!("Eating advertisement response");
-            self.handle_one_message(20);
+            self.handle_one_message(20).await;
             trace!("Eating reset response");
-            self.handle_one_message(20);
+            self.handle_one_message(20).await;
         }
-        self.verify_product_id()?;
-        delay_ms(100);
+        self.verify_product_id().await?;
+        delay_ms(100).await;
         Ok(())
     }
 
@@ -924,35 +925,45 @@ where
     /// update rate of the sensor's gyros.
     ///
     /// Returns true if the report was successfully enabled.
-    pub fn enable_rotation_vector(
+    pub async fn enable_rotation_vector(
         &mut self,
         millis_between_reports: u16,
     ) -> Result<bool, DriverError<SE>> {
         self.enable_report(SENSOR_REPORTID_ROTATION_VECTOR, millis_between_reports)
+            .await
     }
 
     /// Enable reporting of linear acceleration vector.
     ///
     /// Returns true if the report was successfully enabled.
-    pub fn enable_linear_accel(
+    pub async fn enable_linear_accel(
         &mut self,
         millis_between_reports: u16,
     ) -> Result<bool, DriverError<SE>> {
         self.enable_report(SENSOR_REPORTID_LINEAR_ACCEL, millis_between_reports)
+            .await
     }
 
     /// Enable reporting of calibrated gyroscope data.
     ///
     /// Returns true if the report was successfully enabled.
-    pub fn enable_gyro(&mut self, millis_between_reports: u16) -> Result<bool, DriverError<SE>> {
+    pub async fn enable_gyro(
+        &mut self,
+        millis_between_reports: u16,
+    ) -> Result<bool, DriverError<SE>> {
         self.enable_report(SENSOR_REPORTID_GYROSCOPE, millis_between_reports)
+            .await
     }
 
     /// Enable reporting of gravity vector.
     ///
     /// Returns true if the report was successfully enabled.
-    pub fn enable_gravity(&mut self, millis_between_reports: u16) -> Result<bool, DriverError<SE>> {
+    pub async fn enable_gravity(
+        &mut self,
+        millis_between_reports: u16,
+    ) -> Result<bool, DriverError<SE>> {
         self.enable_report(SENSOR_REPORTID_GRAVITY, millis_between_reports)
+            .await
     }
 
     /// Get the timestamp of the last update for a report
@@ -991,18 +1002,19 @@ where
     /// Enable a sensor report with the specified update interval.
     ///
     /// Returns true if the report was successfully enabled.
-    pub fn enable_report(
+    pub async fn enable_report(
         &mut self,
         report_id: u8,
         millis_between_reports: u16,
     ) -> Result<bool, DriverError<SE>> {
         self.enable_report_us(report_id, (millis_between_reports as u32) * 1000)
+            .await
     }
 
     /// Enable a sensor report with the specified update interval.
     ///
     /// Returns true if the report was successfully enabled.
-    pub fn enable_report_us(
+    pub async fn enable_report_us(
         &mut self,
         report_id: u8,
         micros_between_reports: u32,
@@ -1028,11 +1040,11 @@ where
             0,
             0, // MSB sensor-specific config
         ];
-        self.send_packet(CHANNEL_HUB_CONTROL, &cmd_body)?;
+        self.send_packet(CHANNEL_HUB_CONTROL, &cmd_body).await?;
 
         let start = Instant::now();
         while !self.report_enabled[report_id as usize] && start.elapsed().as_millis() < 2000 {
-            if let Ok((received_len, timestamp)) = self.receive_packet_with_timeout(250) {
+            if let Ok((received_len, timestamp)) = self.receive_packet_with_timeout(250).await {
                 if received_len > 0 {
                     if let Err(e) = self.handle_received_packet(received_len, timestamp) {
                         warn!("{:?}", e)
@@ -1040,7 +1052,7 @@ where
                 }
             }
         }
-        delay_ms(200);
+        delay_ms(200).await;
         trace!(
             "Report {:x} is enabled: {}",
             report_id,
@@ -1058,12 +1070,12 @@ where
     /// changes from `NO_DATA` or the timeout expires.
     ///
     /// Returns `true` if status changed before timeout.
-    fn wait_for_frs_response(&mut self, timeout_ms: u128) -> bool {
+    async fn wait_for_frs_response(&mut self, timeout_ms: u128) -> bool {
         let start = Instant::now();
         while self.frs_write_status == FRS_STATUS_NO_DATA
             && start.elapsed().as_millis() < timeout_ms
         {
-            if let Ok((received_len, timestamp)) = self.receive_packet_with_timeout(250) {
+            if let Ok((received_len, timestamp)) = self.receive_packet_with_timeout(250).await {
                 if received_len > 0 {
                     if let Err(e) = self.handle_received_packet(received_len, timestamp) {
                         warn!("{:?}", e)
@@ -1080,13 +1092,13 @@ where
     /// indicates completion or failure, or the timeout expires.
     ///
     /// Returns `true` if write completed successfully.
-    fn wait_for_frs_completion(&mut self, timeout_ms: u128) -> bool {
+    async fn wait_for_frs_completion(&mut self, timeout_ms: u128) -> bool {
         let start = Instant::now();
         while self.frs_write_status != FRS_STATUS_WRITE_FAILED
             && self.frs_write_status != FRS_STATUS_WRITE_COMPLETE
             && start.elapsed().as_millis() < timeout_ms
         {
-            if let Ok((received_len, timestamp)) = self.receive_packet_with_timeout(250) {
+            if let Ok((received_len, timestamp)) = self.receive_packet_with_timeout(250).await {
                 if received_len > 0 {
                     if let Err(e) = self.handle_received_packet(received_len, timestamp) {
                         warn!("{:?}", e)
@@ -1101,7 +1113,7 @@ where
     ///
     /// Sends a pair of 32-bit words to the FRS at the specified offset
     /// and waits for the sensor to acknowledge receipt.
-    fn send_frs_data_chunk(
+    async fn send_frs_data_chunk(
         &mut self,
         offset: u16,
         word1: [u8; 4],
@@ -1109,11 +1121,13 @@ where
         timeout_ms: u128,
     ) -> Result<(), DriverError<SE>> {
         let cmd_body_data = build_frs_write_data(offset, word1, word2);
-        let _ = self.send_packet(CHANNEL_HUB_CONTROL, cmd_body_data.as_ref())?;
+        let _ = self
+            .send_packet(CHANNEL_HUB_CONTROL, cmd_body_data.as_ref())
+            .await?;
 
         self.frs_write_status = FRS_STATUS_NO_DATA;
-        self.wait_for_frs_response(timeout_ms);
-        delay_ms(150);
+        self.wait_for_frs_response(timeout_ms).await;
+        delay_ms(150).await;
         Ok(())
     }
 
@@ -1121,7 +1135,7 @@ where
     ///
     /// This configures the reference frame transformation applied to all
     /// sensor outputs.
-    pub fn set_sensor_orientation(
+    pub async fn set_sensor_orientation(
         &mut self,
         qi: f32,
         qj: f32,
@@ -1132,7 +1146,9 @@ where
         // Step 1: Request FRS write
         let length: u16 = 4;
         let cmd_body_req = build_frs_write_request(length, FRS_TYPE_SENSOR_ORIENTATION);
-        let _ = self.send_packet(CHANNEL_HUB_CONTROL, cmd_body_req.as_ref())?;
+        let _ = self
+            .send_packet(CHANNEL_HUB_CONTROL, cmd_body_req.as_ref())
+            .await?;
 
         // Step 2: Wait for write ready
         self.frs_write_status = FRS_STATUS_NO_DATA;
@@ -1143,18 +1159,18 @@ where
             return Ok(false);
         }
         trace!("FRS Write ready");
-        delay_ms(150);
+        delay_ms(150).await;
 
         // Step 3: Convert quaternion and send data chunks
         let (q30_qi, q30_qj, q30_qk, q30_qr) = quaternion_to_frs_words(qi, qj, qk, qr);
 
-        self.send_frs_data_chunk(0, q30_qi, q30_qj, 800)?;
-        self.send_frs_data_chunk(2, q30_qk, q30_qr, 800)?;
+        self.send_frs_data_chunk(0, q30_qi, q30_qj, 800).await?;
+        self.send_frs_data_chunk(2, q30_qk, q30_qr, 800).await?;
 
         // Step 4: Wait for completion
         self.frs_write_status = FRS_STATUS_NO_DATA;
-        let success = self.wait_for_frs_completion(800);
-        delay_ms(100);
+        let success = self.wait_for_frs_completion(800).await;
+        delay_ms(100).await;
 
         Ok(success)
     }
@@ -1179,7 +1195,11 @@ where
     }
 
     /// Send packet from our packet send buf
-    fn send_packet(&mut self, channel: u8, body_data: &[u8]) -> Result<usize, DriverError<SE>> {
+    async fn send_packet(
+        &mut self,
+        channel: u8,
+        body_data: &[u8],
+    ) -> Result<usize, DriverError<SE>> {
         let packet_length = self.prep_send_packet(channel, body_data);
 
         let rc = self
@@ -1188,6 +1208,7 @@ where
                 &self.packet_send_buf[..packet_length],
                 &mut self.packet_recv_buf,
             )
+            .await
             .map_err(DriverError::CommError)?;
         if rc > 0 {
             if let Err(e) = self.handle_received_packet(rc, SystemTime::now()) {
@@ -1198,7 +1219,7 @@ where
     }
 
     /// Read one packet into the receive buffer
-    pub(crate) fn receive_packet_with_timeout(
+    pub(crate) async fn receive_packet_with_timeout(
         &mut self,
         max_ms: usize,
     ) -> Result<(usize, SystemTime), DriverError<SE>> {
@@ -1207,6 +1228,7 @@ where
         let (packet_len, timestamp) = self
             .sensor_interface
             .read_with_timeout(&mut self.packet_recv_buf, max_ms)
+            .await
             .map_err(DriverError::CommError)?;
 
         self.last_packet_len_received = packet_len;
@@ -1215,7 +1237,7 @@ where
     }
 
     /// Verify that the sensor returns an expected chip ID
-    fn verify_product_id(&mut self) -> Result<(), DriverError<SE>> {
+    async fn verify_product_id(&mut self) -> Result<(), DriverError<SE>> {
         trace!("request PID...");
         let cmd_body: [u8; 2] = [
             SHUB_PROD_ID_REQ, // request product ID
@@ -1225,10 +1247,12 @@ where
         // for some reason, reading PID right after sending request does not work with
         // i2c
         if self.sensor_interface.requires_soft_reset() {
-            self.send_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref())?;
+            self.send_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref())
+                .await?;
         } else {
-            let response_size =
-                self.send_and_receive_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref())?;
+            let response_size = self
+                .send_and_receive_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref())
+                .await?;
             if response_size > 0 {
                 if let Err(e) = self.handle_received_packet(response_size, SystemTime::now()) {
                     warn!("{:?}", e)
@@ -1239,7 +1263,7 @@ where
         // process all incoming messages until we get a product id (or no more data)
         while !self.prod_id_verified {
             trace!("read PID");
-            let msg_count = self.handle_one_message(300);
+            let msg_count = self.handle_one_message(300).await;
             if msg_count < 1 {
                 break;
             }
@@ -1310,10 +1334,12 @@ where
     ///
     /// Normally applications should not need to call this directly,
     /// as it is called during `init`.
-    pub fn soft_reset(&mut self) -> Result<(), DriverError<SE>> {
+    pub async fn soft_reset(&mut self) -> Result<(), DriverError<SE>> {
         trace!("soft_reset");
         let data: [u8; 1] = [EXECUTABLE_DEVICE_CMD_RESET];
-        let received_len = self.send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
+        let received_len = self
+            .send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref())
+            .await?;
         if received_len > 0 {
             if let Err(e) = self.handle_received_packet(received_len, SystemTime::now()) {
                 warn!("{:?}", e)
@@ -1324,7 +1350,7 @@ where
 
     /// Send a packet and receive a packet simultaneously, returning the length
     /// of the received packet.
-    fn send_and_receive_packet(
+    async fn send_and_receive_packet(
         &mut self,
         channel: u8,
         body_data: &[u8],
@@ -1337,6 +1363,7 @@ where
                 self.packet_send_buf[..send_packet_length].as_ref(),
                 &mut self.packet_recv_buf,
             )
+            .await
             .map_err(DriverError::CommError)?;
 
         Ok(recv_packet_length)
@@ -1369,20 +1396,20 @@ mod tests {
     impl SensorInterface for MockSensorInterface {
         type SensorError = MockError;
 
-        fn setup(&mut self) -> Result<(), Self::SensorError> {
+        async fn setup(&mut self) -> Result<(), Self::SensorError> {
             self.setup_called = true;
             Ok(())
         }
 
-        fn write_packet(&mut self, _packet: &[u8]) -> Result<(), Self::SensorError> {
+        async fn write_packet(&mut self, _packet: &[u8]) -> Result<(), Self::SensorError> {
             Ok(())
         }
 
-        fn read_packet(&mut self, _recv_buf: &mut [u8]) -> Result<usize, Self::SensorError> {
+        async fn read_packet(&mut self, _recv_buf: &mut [u8]) -> Result<usize, Self::SensorError> {
             Ok(0)
         }
 
-        fn read_with_timeout(
+        async fn read_with_timeout(
             &mut self,
             _recv_buf: &mut [u8],
             _max_ms: usize,
@@ -1390,7 +1417,7 @@ mod tests {
             Ok((0, SystemTime::now()))
         }
 
-        fn send_and_receive_packet(
+        async fn send_and_receive_packet(
             &mut self,
             _send_buf: &[u8],
             _recv_buf: &mut [u8],

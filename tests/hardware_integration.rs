@@ -36,35 +36,39 @@ const SENSOR_WARMUP_MS: u64 = 500;
 // Basic Tests
 // =============================================================================
 
-#[test]
+#[tokio::test]
 #[ignore]
-fn test_imu_initialization() {
+async fn test_imu_initialization() {
     init_logger();
 
     let mut imu = BNO08x::new_spi_from_symbol(TEST_SPI_DEVICE, TEST_INT_GPIO, TEST_RST_GPIO)
         .expect("Failed to create IMU driver");
 
-    imu.init().expect("Failed to initialize IMU");
+    imu.init().await.expect("Failed to initialize IMU");
     sleep(Duration::from_millis(SENSOR_WARMUP_MS));
 
     println!("✓ IMU initialized successfully");
 }
 
-#[test]
+#[tokio::test]
 #[ignore]
-fn test_soft_reset() {
+async fn test_soft_reset() {
     init_logger();
 
     let mut imu = BNO08x::new_spi_from_symbol(TEST_SPI_DEVICE, TEST_INT_GPIO, TEST_RST_GPIO)
         .expect("Failed to create IMU driver");
 
-    imu.init().expect("Failed to initialize IMU");
+    imu.init().await.expect("Failed to initialize IMU");
     sleep(Duration::from_millis(SENSOR_WARMUP_MS));
 
-    imu.soft_reset().expect("Failed to perform soft reset");
+    imu.soft_reset()
+        .await
+        .expect("Failed to perform soft reset");
     sleep(Duration::from_millis(SENSOR_WARMUP_MS * 2));
 
-    imu.init().expect("Failed to re-initialize after reset");
+    imu.init()
+        .await
+        .expect("Failed to re-initialize after reset");
     sleep(Duration::from_millis(SENSOR_WARMUP_MS));
 
     println!("✓ Soft reset successful");
@@ -74,16 +78,17 @@ fn test_soft_reset() {
 // Sensor Reading Tests (using handle_one_message pattern like working imu app)
 // =============================================================================
 
-#[test]
+#[tokio::test]
 #[ignore]
-fn test_accelerometer() {
+async fn test_accelerometer() {
     init_logger();
 
     let mut imu = BNO08x::new_spi_from_symbol(TEST_SPI_DEVICE, TEST_INT_GPIO, TEST_RST_GPIO)
         .expect("Failed to create IMU driver");
-    imu.init().expect("Failed to initialize IMU");
+    imu.init().await.expect("Failed to initialize IMU");
 
-    imu.enable_report(SENSOR_REPORTID_ACCELEROMETER, REPORT_INTERVAL_MS)
+    imu.enable_report(SENSOR_REPORTID_MAGNETIC_FIELD, REPORT_INTERVAL_MS)
+        .await
         .expect("Failed to enable accelerometer");
 
     sleep(Duration::from_millis(SENSOR_WARMUP_MS));
@@ -106,16 +111,17 @@ fn test_accelerometer() {
     println!("✓ Accelerometer: {:?}, |a| = {:.2} m/s²", accel, magnitude);
 }
 
-#[test]
+#[tokio::test]
 #[ignore]
-fn test_gyroscope() {
+async fn test_gyroscope() {
     init_logger();
 
     let mut imu = BNO08x::new_spi_from_symbol(TEST_SPI_DEVICE, TEST_INT_GPIO, TEST_RST_GPIO)
         .expect("Failed to create IMU driver");
-    imu.init().expect("Failed to initialize IMU");
+    imu.init().await.expect("Failed to initialize IMU");
 
     imu.enable_gyro(REPORT_INTERVAL_MS)
+        .await
         .expect("Failed to enable gyroscope");
     sleep(Duration::from_millis(SENSOR_WARMUP_MS));
 
@@ -136,16 +142,17 @@ fn test_gyroscope() {
     println!("✓ Gyroscope: {:?} rad/s", gyro);
 }
 
-#[test]
+#[tokio::test]
 #[ignore]
-fn test_magnetometer() {
+async fn test_magnetometer() {
     init_logger();
 
     let mut imu = BNO08x::new_spi_from_symbol(TEST_SPI_DEVICE, TEST_INT_GPIO, TEST_RST_GPIO)
         .expect("Failed to create IMU driver");
-    imu.init().expect("Failed to initialize IMU");
+    imu.init().await.expect("Failed to initialize IMU");
 
     imu.enable_report(SENSOR_REPORTID_MAGNETIC_FIELD, REPORT_INTERVAL_MS)
+        .await
         .expect("Failed to enable magnetometer");
 
     sleep(Duration::from_millis(SENSOR_WARMUP_MS));
@@ -168,16 +175,17 @@ fn test_magnetometer() {
     println!("✓ Magnetometer: {:?}, |B| = {:.2} µT", mag, magnitude);
 }
 
-#[test]
+#[tokio::test]
 #[ignore]
-fn test_rotation_vector() {
+async fn test_rotation_vector() {
     init_logger();
 
     let mut imu = BNO08x::new_spi_from_symbol(TEST_SPI_DEVICE, TEST_INT_GPIO, TEST_RST_GPIO)
         .expect("Failed to create IMU driver");
-    imu.init().expect("Failed to initialize IMU");
+    imu.init().await.expect("Failed to initialize IMU");
 
     imu.enable_rotation_vector(REPORT_INTERVAL_MS)
+        .await
         .expect("Failed to enable rotation vector");
 
     sleep(Duration::from_millis(SENSOR_WARMUP_MS * 2));
@@ -203,18 +211,20 @@ fn test_rotation_vector() {
     );
 }
 
-#[test]
+#[tokio::test]
 #[ignore]
-fn test_linear_acceleration_and_gravity() {
+async fn test_linear_acceleration_and_gravity() {
     init_logger();
 
     let mut imu = BNO08x::new_spi_from_symbol(TEST_SPI_DEVICE, TEST_INT_GPIO, TEST_RST_GPIO)
         .expect("Failed to create IMU driver");
-    imu.init().expect("Failed to initialize IMU");
+    imu.init().await.expect("Failed to initialize IMU");
 
     imu.enable_linear_accel(REPORT_INTERVAL_MS)
+        .await
         .expect("Failed to enable linear accel");
     imu.enable_gravity(REPORT_INTERVAL_MS)
+        .await
         .expect("Failed to enable gravity");
 
     sleep(Duration::from_millis(SENSOR_WARMUP_MS));
@@ -254,23 +264,26 @@ fn test_linear_acceleration_and_gravity() {
 // API Usage Tests (matching working imu application patterns)
 // =============================================================================
 
-#[test]
+#[tokio::test]
 #[ignore]
-fn test_handle_messages_with_limit() {
+async fn test_handle_messages_with_limit() {
     init_logger();
 
     let mut imu = BNO08x::new_spi_from_symbol(TEST_SPI_DEVICE, TEST_INT_GPIO, TEST_RST_GPIO)
         .expect("Failed to create IMU driver");
-    imu.init().expect("Failed to initialize IMU");
+    imu.init().await.expect("Failed to initialize IMU");
 
     imu.enable_report(SENSOR_REPORTID_ACCELEROMETER, REPORT_INTERVAL_MS)
+        .await
         .expect("Failed to enable accelerometer");
 
     sleep(Duration::from_millis(SENSOR_WARMUP_MS));
 
     // This is how the working imu application does it: handle_messages(timeout,
     // max_count)
-    let count = imu.handle_messages(REPORT_INTERVAL_MS as usize * 2, 5);
+    let count = imu
+        .handle_messages(REPORT_INTERVAL_MS as usize * 2, 5)
+        .await;
 
     assert!(
         count > 0 && count <= 5,
@@ -280,14 +293,14 @@ fn test_handle_messages_with_limit() {
     println!("✓ handle_messages(timeout, max=5): {} messages", count);
 }
 
-#[test]
+#[tokio::test]
 #[ignore]
-fn test_sensor_report_callback() {
+async fn test_sensor_report_callback() {
     init_logger();
 
     let mut imu = BNO08x::new_spi_from_symbol(TEST_SPI_DEVICE, TEST_INT_GPIO, TEST_RST_GPIO)
         .expect("Failed to create IMU driver");
-    imu.init().expect("Failed to initialize IMU");
+    imu.init().await.expect("Failed to initialize IMU");
 
     let callback_count = Arc::new(Mutex::new(0));
     let callback_count_clone = callback_count.clone();
@@ -303,6 +316,7 @@ fn test_sensor_report_callback() {
     );
 
     imu.enable_report(SENSOR_REPORTID_ACCELEROMETER, REPORT_INTERVAL_MS)
+        .await
         .expect("Failed to enable accelerometer");
 
     sleep(Duration::from_millis(SENSOR_WARMUP_MS));
@@ -326,14 +340,14 @@ fn test_sensor_report_callback() {
     println!("✓ Callback removed successfully");
 }
 
-#[test]
+#[tokio::test]
 #[ignore]
-fn test_report_status_queries() {
+async fn test_report_status_queries() {
     init_logger();
 
     let mut imu = BNO08x::new_spi_from_symbol(TEST_SPI_DEVICE, TEST_INT_GPIO, TEST_RST_GPIO)
         .expect("Failed to create IMU driver");
-    imu.init().expect("Failed to initialize IMU");
+    imu.init().await.expect("Failed to initialize IMU");
 
     // Initially disabled
     assert!(!imu.is_report_enabled(SENSOR_REPORTID_ACCELEROMETER));
@@ -341,6 +355,7 @@ fn test_report_status_queries() {
 
     // Enable
     imu.enable_report(SENSOR_REPORTID_ACCELEROMETER, REPORT_INTERVAL_MS)
+        .await
         .expect("Failed to enable accelerometer");
     sleep(Duration::from_millis(100));
 
@@ -362,27 +377,30 @@ fn test_report_status_queries() {
     println!("  Update time: {} ms", update_time);
 }
 
-#[test]
+#[tokio::test]
 #[ignore]
-fn test_multiple_sensors() {
+async fn test_multiple_sensors() {
     init_logger();
 
     let mut imu = BNO08x::new_spi_from_symbol(TEST_SPI_DEVICE, TEST_INT_GPIO, TEST_RST_GPIO)
         .expect("Failed to create IMU driver");
-    imu.init().expect("Failed to initialize IMU");
+    imu.init().await.expect("Failed to initialize IMU");
 
     // Enable multiple sensors like the working imu application does
     imu.enable_report(SENSOR_REPORTID_ACCELEROMETER, REPORT_INTERVAL_MS)
+        .await
         .expect("accel");
-    imu.enable_gyro(REPORT_INTERVAL_MS).expect("gyro");
+    imu.enable_gyro(REPORT_INTERVAL_MS).await.expect("gyro");
     imu.enable_rotation_vector(REPORT_INTERVAL_MS)
+        .await
         .expect("rotation");
 
     sleep(Duration::from_millis(SENSOR_WARMUP_MS));
 
     // Use handle_messages like working app
     for _ in 0..20 {
-        imu.handle_messages(REPORT_INTERVAL_MS as usize * 2, 10);
+        imu.handle_messages(REPORT_INTERVAL_MS as usize * 2, 10)
+            .await;
         sleep(Duration::from_millis(REPORT_INTERVAL_MS as u64));
     }
 

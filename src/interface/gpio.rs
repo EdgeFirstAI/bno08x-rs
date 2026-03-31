@@ -4,6 +4,7 @@
 use ::std::ops::Not;
 use gpiocdev::{
     line::{EdgeDetection, EdgeEvent, EdgeKind, Value},
+    tokio::AsyncRequest,
     Request,
 };
 use std::sync::Arc;
@@ -74,14 +75,16 @@ pub trait InputPin {
     /// Is the input pin low?
     fn is_low(&self) -> Result<bool, Self::Error>;
 
-    /// read events
-    fn read_event(&mut self) -> Result<EdgeEvent, Self::Error>;
+    /// read events asynchronously (non-blocking)
+    fn read_event(
+        &mut self,
+    ) -> impl std::future::Future<Output = Result<EdgeEvent, Self::Error>> + Send;
 
-    /// read events
+    /// read events with a timeout
     fn read_event_with_timeout(
         &mut self,
         timeout: std::time::Duration,
-    ) -> Result<Option<EdgeEvent>, Self::Error>;
+    ) -> impl std::future::Future<Output = Result<Option<EdgeEvent>, Self::Error>> + Send;
 }
 
 pub struct GpiodOut {
@@ -114,41 +117,27 @@ impl OutputPin for GpiodOut {
 }
 
 pub struct GpiodIn {
-    input: Arc<Request>,
-    rx: watch_channel::Receiver<EdgeEvent>,
+    input: AsyncRequest,
 }
 impl GpiodIn {
     pub fn new(chip: &str, pin: u32) -> gpiocdev::Result<GpiodIn> {
-        let input = Request::builder()
-            .on_chip(chip)
-            .with_line(pin)
-            .as_active_high()
-            .with_edge_detection(EdgeDetection::BothEdges)
-            .request()?;
-        let (tx, rx) = watch_channel::channel(EdgeEvent {
-            timestamp_ns: 0,
-            kind: gpiocdev::line::EdgeKind::Rising,
-            offset: pin,
-            seqno: 0,
-            line_seqno: 0,
-        });
-        let input = Arc::new(input);
-        let input_clone = Arc::clone(&input);
-        std::thread::spawn(move || {
-            for e in input_clone.edge_events() {
-                let Ok(mut e) = e else {
-                    log::error!("Error reading edge event: {:?}", e);
-                    continue;
-                };
-                match input_clone.lone_value().unwrap() {
-                    Value::Active => e.kind = EdgeKind::Rising,
-                    Value::Inactive => e.kind = EdgeKind::Falling,
-                }
-                tx.send(e);
-            }
-        });
+        let input = AsyncRequest::new(
+            Request::builder()
+                .on_chip(chip)
+                .with_line(pin)
+                .as_active_high()
+                .with_edge_detection(EdgeDetection::BothEdges)
+                .request()?,
+        );
+        // let (tx, rx) = watch_channel::channel(EdgeEvent {
+        //     timestamp_ns: 0,
+        //     kind: gpiocdev::line::EdgeKind::Rising,
+        //     offset: pin,
+        //     seqno: 0,
+        //     line_seqno: 0,
+        // });
 
-        Ok(GpiodIn { input, rx })
+        Ok(GpiodIn { input })
     }
 }
 
@@ -157,35 +146,30 @@ impl InputPin for GpiodIn {
 
     /// Is the input pin high?
     fn is_high(&self) -> Result<bool, Self::Error> {
-        let values = self.input.lone_value()?;
+        let values = self.input.as_ref().lone_value()?;
         Ok(values == Value::Active)
     }
 
     /// Is the input pin low?
     fn is_low(&self) -> Result<bool, Self::Error> {
-        let values = self.input.lone_value()?;
+        let values = self.input.as_ref().lone_value()?;
         Ok(values == Value::Inactive)
     }
 
-    /// Read events
-    fn read_event(&mut self) -> Result<EdgeEvent, Self::Error> {
-        self.rx
-            .recv()
-            .map_err(|e| gpiocdev::Error::InvalidArgument(format!("watch channel error: {:?}", e)))
+    /// Read events asynchronously (non-blocking)
+    async fn read_event(&mut self) -> Result<EdgeEvent, Self::Error> {
+        self.input.read_edge_event().await
     }
 
     /// Read events with a timeout
-    fn read_event_with_timeout(
+    async fn read_event_with_timeout(
         &mut self,
         timeout: std::time::Duration,
     ) -> Result<Option<EdgeEvent>, Self::Error> {
-        let curr = self.rx.borrow();
-        if curr.kind == EdgeKind::Falling {
-            return Ok(Some(curr));
-        }
-        match self.rx.recv_timeout(timeout) {
-            Ok(value) => Ok(Some(value)),
-            Err(_) => Ok(None), // timeout or channel closed
+        match tokio::time::timeout(timeout, self.input.read_edge_event()).await {
+            Ok(Ok(evt)) => Ok(Some(evt)),
+            Ok(Err(e)) => Err(e),
+            Err(_) => Ok(None), // timeout
         }
     }
 }
@@ -389,7 +373,7 @@ mod tests {
             Ok(!self.high)
         }
 
-        fn read_event(&mut self) -> Result<EdgeEvent, Self::Error> {
+        async fn read_event(&mut self) -> Result<EdgeEvent, Self::Error> {
             if self.error_on_read {
                 return Err(MockInputError);
             }
@@ -403,7 +387,7 @@ mod tests {
             })
         }
 
-        fn read_event_with_timeout(
+        async fn read_event_with_timeout(
             &mut self,
             _timeout: std::time::Duration,
         ) -> Result<Option<EdgeEvent>, Self::Error> {

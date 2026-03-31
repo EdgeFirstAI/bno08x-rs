@@ -17,13 +17,15 @@
 /// etc. A single type can implement this trait for different types of `UXX`.
 use std::{thread, time::Duration};
 
-pub fn delay_ms(ms: usize) {
+pub async fn delay_ms(ms: usize) {
     let time = Duration::from_millis(ms as u64);
-    thread::sleep(time);
+    // thread::sleep(time);
+    tokio::time::sleep(time).await;
 }
 
 /// Microsecond delay
-pub fn delay_us(us: usize) {
+pub async fn delay_us(us: usize) {
     let time = Duration::from_micros(us as u64);
-    thread::sleep(time);
+    // thread::sleep(time);
+    tokio::time::sleep(time).await;
 }

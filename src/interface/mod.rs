@@ -42,15 +42,15 @@ pub trait SensorInterface {
     ///
     /// Called once during driver initialization to set up GPIO pins,
     /// SPI configuration, etc.
-    fn setup(&mut self) -> Result<(), Self::SensorError>;
+    async fn setup(&mut self) -> Result<(), Self::SensorError>;
 
     /// Write a complete SHTP packet to the sensor.
-    fn write_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError>;
+    async fn write_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError>;
 
     /// Read the next available packet from the sensor.
     ///
     /// Returns the number of bytes read (up to the buffer size).
-    fn read_packet(&mut self, recv_buf: &mut [u8]) -> Result<usize, Self::SensorError>;
+    async fn read_packet(&mut self, recv_buf: &mut [u8]) -> Result<usize, Self::SensorError>;
 
     /// Wait for sensor data and read when available.
     ///
@@ -58,14 +58,14 @@ pub trait SensorInterface {
     ///
     /// * `recv_buf` - Buffer to store the received packet
     /// * `max_ms` - Maximum time to wait for data (milliseconds)
-    fn read_with_timeout(
+    async fn read_with_timeout(
         &mut self,
         recv_buf: &mut [u8],
         max_ms: usize,
     ) -> Result<(usize, SystemTime), Self::SensorError>;
 
     /// Send a packet and immediately read the response.
-    fn send_and_receive_packet(
+    async fn send_and_receive_packet(
         &mut self,
         send_buf: &[u8],
         recv_buf: &mut [u8],

@@ -91,13 +91,13 @@ where
 
     /// Return true if hintn was signaled within `max_ms` milliseconds, false
     /// otherwise
-    fn block_on_hintn(&mut self, max_ms: usize) -> bool {
+    async fn block_on_hintn(&mut self, max_ms: usize) -> bool {
         if self.hintn_signaled() {
             return true;
         }
         let deadline = Instant::now() + Duration::from_millis(max_ms as u64);
         while let Some(rem) = deadline.checked_duration_since(Instant::now()) {
-            if let Some(evt) = self.hintn.read_event_with_timeout(rem).unwrap() {
+            if let Some(evt) = self.hintn.read_event_with_timeout(rem).await.unwrap() {
                 if evt.kind == EdgeKind::Falling {
                     return true;
                 }
@@ -112,17 +112,52 @@ where
     /// was signaled, false if the hintn event stream was disconnected
     /// This function can block forever if the sensor never signals hintn, so
     /// use with caution
-    fn block_on_hintn_no_limit(&mut self) -> bool {
+    async fn block_on_hintn_no_limit(&mut self) -> bool {
         if self.hintn_signaled() {
             return true;
         }
         loop {
-            if let Ok(evt) = self.hintn.read_event() {
+            if let Ok(evt) = self.hintn.read_event().await {
                 if evt.kind == EdgeKind::Falling {
                     return true;
                 }
             }
         }
+    }
+
+    /// Read a complete packet from the sensor. Assume we already waited for
+    /// hintn to be signaled
+    async fn read_packet_no_wait(
+        &mut self,
+        recv_buf: &mut [u8],
+    ) -> Result<usize, Error<CommE, PinE>> {
+        // check how long the message to read is
+        let mut read_packet_len = 0;
+        recv_buf[..PACKET_HEADER_LENGTH].fill(0);
+
+        let rc = self.spi.transfer(&mut recv_buf[..PACKET_HEADER_LENGTH]);
+        if rc.is_ok() {
+            read_packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
+        }
+
+        //zero the receive buffer
+        recv_buf[..read_packet_len].fill(0);
+
+        if !self.block_on_hintn_no_limit().await {
+            error!("No message to read - HINTN Err");
+            return Err(NoDataAvailable);
+        }
+
+        let rc = self.spi.transfer(&mut recv_buf[..read_packet_len]);
+        if rc.is_ok() {
+            read_packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
+        }
+
+        if read_packet_len > 0 {
+            self.received_packet_count += 1;
+        }
+
+        Ok(read_packet_len)
     }
 }
 
@@ -142,7 +177,7 @@ where
         false
     }
 
-    fn setup(&mut self) -> Result<(), Self::SensorError> {
+    async fn setup(&mut self) -> Result<(), Self::SensorError> {
         // Deselect sensor
         // self.csn.set_high().map_err(Error::Pin)?;
         // Note: This assumes that WAK/PS0 is set to high already
@@ -151,9 +186,9 @@ where
 
         trace!("reset cycle... ");
         // reset cycle
-        delay_ms(2);
+        delay_ms(2).await;
         self.reset.set_low().map_err(Error::Pin)?;
-        delay_ms(2);
+        delay_ms(2).await;
         self.reset.set_high().map_err(Error::Pin)?;
 
         // wait for sensor to set hintn pin after reset
@@ -165,7 +200,7 @@ where
         Ok(())
     }
 
-    fn send_and_receive_packet(
+    async fn send_and_receive_packet(
         &mut self,
         send_buf: &[u8],
         recv_buf: &mut [u8],
@@ -192,7 +227,7 @@ where
         // will need to wait for hintn pin to write and cannot use the WAKE pin
         // to indicate we want to write. https://au-zone.atlassian.net/browse/TOP2-188
         // MVN2-300000 R00A GNSS-IMU Schematics.PDF
-        if !self.block_on_hintn(100) {
+        if !self.block_on_hintn(100).await {
             error!("No message to read - HINTN timeout");
             return Err(NoDataAvailable);
         }
@@ -217,7 +252,7 @@ where
             });
         }
 
-        if !self.block_on_hintn(100) {
+        if !self.block_on_hintn(100).await {
             error!("No message to read - HINTN timeout");
             return Err(NoDataAvailable);
         }
@@ -233,55 +268,28 @@ where
         Ok(read_packet_len)
     }
 
-    fn write_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError> {
+    async fn write_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError> {
         self.spi.write(packet).map_err(Error::Comm)?;
         Ok(())
     }
 
     /// Read a complete packet from the sensor
-    fn read_packet(&mut self, recv_buf: &mut [u8]) -> Result<usize, Self::SensorError> {
-        // check how long the message to read is
-        let mut read_packet_len = 0;
-        recv_buf[..PACKET_HEADER_LENGTH].fill(0);
-
-        if !self.block_on_hintn_no_limit() {
+    async fn read_packet(&mut self, recv_buf: &mut [u8]) -> Result<usize, Self::SensorError> {
+        if !self.block_on_hintn_no_limit().await {
             error!("No message to read - HINTN Err");
             return Err(NoDataAvailable);
         }
-
-        let rc = self.spi.transfer(&mut recv_buf[..PACKET_HEADER_LENGTH]);
-        if rc.is_ok() {
-            read_packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
-        }
-
-        //zero the receive buffer
-        recv_buf[..read_packet_len].fill(0);
-
-        if !self.block_on_hintn_no_limit() {
-            error!("No message to read - HINTN Err");
-            return Err(NoDataAvailable);
-        }
-
-        let rc = self.spi.transfer(&mut recv_buf[..read_packet_len]);
-        if rc.is_ok() {
-            read_packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
-        }
-
-        if read_packet_len > 0 {
-            self.received_packet_count += 1;
-        }
-
-        Ok(read_packet_len)
+        self.read_packet_no_wait(recv_buf).await
     }
 
-    fn read_with_timeout(
+    async fn read_with_timeout(
         &mut self,
         recv_buf: &mut [u8],
         max_ms: usize,
     ) -> Result<(usize, SystemTime), Self::SensorError> {
-        if self.block_on_hintn(max_ms) {
+        if self.block_on_hintn(max_ms).await {
             let timestamp = SystemTime::now();
-            return Ok((self.read_packet(recv_buf)?, timestamp));
+            return Ok((self.read_packet_no_wait(recv_buf).await?, timestamp));
         }
         // trace!("Sensor did not wake for read");
         Ok((0, SystemTime::now()))
