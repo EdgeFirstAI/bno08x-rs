@@ -1,12 +1,13 @@
 // Copyright 2025 Au-Zone Technologies Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+use gpiocdev::line::EdgeKind;
 use log::{error, trace};
 
 use super::SensorInterface;
 use crate::{
     interface::{
-        delay::{delay_ms, delay_us},
+        delay::delay_ms,
         gpio::{InputPin, OutputPin},
         spidev::{Transfer, Write},
         SensorCommon, PACKET_HEADER_LENGTH,
@@ -83,8 +84,6 @@ where
             if low_detected && self.hintn_signaled() {
                 return true;
             }
-
-            delay_us(100);
         }
 
         false
@@ -93,19 +92,19 @@ where
     /// Return true if hintn was signaled within `max_ms` milliseconds, false
     /// otherwise
     fn block_on_hintn(&mut self, max_ms: usize) -> bool {
-        let start = Instant::now();
-        while start.elapsed() < Duration::from_millis(max_ms as u64) {
-            if self.hintn_signaled() {
-                return true;
-            }
-
-            // Datasheet (1.2.4.1 Responding to H_INTN) recommends responding to
-            // hintn within 1/10th of the fastest requested sensor
-            // report. The bno08x can do 400 Hz, so that's 250 us.
-            // We check a bit more frequently to be safe
-            delay_us(100);
+        if self.hintn_signaled() {
+            return true;
         }
-
+        let deadline = Instant::now() + Duration::from_millis(max_ms as u64);
+        while let Some(rem) = deadline.checked_duration_since(Instant::now()) {
+            if let Some(evt) = self.hintn.read_event_with_timeout(rem).unwrap() {
+                if evt.kind == EdgeKind::Falling {
+                    return true;
+                }
+            } else {
+                return false;
+            }
+        }
         false
     }
 
@@ -114,13 +113,14 @@ where
     /// This function can block forever if the sensor never signals hintn, so
     /// use with caution
     fn block_on_hintn_no_limit(&mut self) -> bool {
+        if self.hintn_signaled() {
+            return true;
+        }
         loop {
-            if self.hintn_signaled() {
-                return true;
-            }
-            if let Err(evt) = self.hintn.read_event() {
-                error!("Error waiting for HINTN event: {:?}", evt);
-                return false;
+            if let Ok(evt) = self.hintn.read_event() {
+                if evt.kind == EdgeKind::Falling {
+                    return true;
+                }
             }
         }
     }
@@ -248,7 +248,6 @@ where
             error!("No message to read - HINTN Err");
             return Err(NoDataAvailable);
         }
-        // As soon as host selects CSN, HINTN resets
 
         let rc = self.spi.transfer(&mut recv_buf[..PACKET_HEADER_LENGTH]);
         if rc.is_ok() {

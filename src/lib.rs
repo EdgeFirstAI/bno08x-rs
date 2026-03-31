@@ -85,6 +85,7 @@ pub mod driver;
 pub mod frs;
 pub mod interface;
 pub mod reports;
+pub mod watch_channel;
 
 // Re-export main driver types at crate root for convenience
 pub use constants::{

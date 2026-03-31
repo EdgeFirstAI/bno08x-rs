@@ -83,7 +83,7 @@ use core::ops::Shr;
 use std::{
     collections::HashMap,
     fmt::Debug,
-    io::{self, Error, ErrorKind},
+    io::{self, ErrorKind},
     time::{Instant, SystemTime},
 };
 
@@ -292,20 +292,8 @@ impl<SI> BNO08x<'_, SI> {
 /// * `Ok(Some((chip_path, line_number)))` - If the pin was found
 /// * `Ok(None)` - If no pin with the given name was found
 /// * `Err(_)` - If there was an error accessing GPIO chips
-fn find_gpio_by_symbol(symbol: &str) -> io::Result<Option<(String, u32)>> {
-    let gpio_chips = gpiod::Chip::list_devices()?;
-
-    for entry in gpio_chips {
-        let chip = gpiod::Chip::new(&entry)?;
-        for i in 0..chip.num_lines() {
-            let line_info = chip.line_info(i)?;
-            trace!("--- {} ---", line_info.name);
-            if line_info.name == symbol {
-                return Ok(Some((entry.display().to_string(), i)));
-            }
-        }
-    }
-    Ok(None)
+fn find_gpio_by_symbol(symbol: &str) -> Option<(String, u32)> {
+    gpiocdev::find_named_line(symbol).map(|x| (x.chip.display().to_string(), x.info.offset))
 }
 
 impl<'a> BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>> {
@@ -324,19 +312,9 @@ impl<'a> BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>> {
         hintn_pin: u32,
         reset_gpiochip: &str,
         reset_pin: u32,
-    ) -> io::Result<BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>>> {
-        let hintn: GpiodIn;
-        let reset: GpiodOut;
-        if hintn_gpiochip == reset_gpiochip {
-            let chip = gpiod::Chip::new(hintn_gpiochip)?;
-            hintn = GpiodIn::new(&chip, hintn_pin)?;
-            reset = GpiodOut::new(&chip, reset_pin)?;
-        } else {
-            let chip0 = gpiod::Chip::new(hintn_gpiochip)?;
-            hintn = GpiodIn::new(&chip0, hintn_pin)?;
-            let chip1 = gpiod::Chip::new(reset_gpiochip)?;
-            reset = GpiodOut::new(&chip1, reset_pin)?;
-        }
+    ) -> gpiocdev::Result<BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>>> {
+        let hintn = GpiodIn::new(hintn_gpiochip, hintn_pin)?;
+        let reset = GpiodOut::new(reset_gpiochip, reset_pin)?;
 
         let spidev = SpiDevice::new(spidevice)?;
         let ctrl_lines: SpiControlLines<SpiDevice, GpiodIn, GpiodOut> =
@@ -366,19 +344,13 @@ impl<'a> BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>> {
         spidevice: &str,
         hintn_pin: &str,
         reset_pin: &str,
-    ) -> io::Result<BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>>> {
-        let (hintn_gpio_chip, hintn_num) = find_gpio_by_symbol(hintn_pin)?.ok_or_else(|| {
-            Error::new(
-                ErrorKind::AddrNotAvailable,
-                format!("Did not find hintn pin \"{}\"", hintn_pin),
-            )
+    ) -> gpiocdev::Result<BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>>> {
+        let (hintn_gpio_chip, hintn_num) = find_gpio_by_symbol(hintn_pin).ok_or_else(|| {
+            gpiocdev::Error::InvalidArgument(format!("Did not find hintn pin \"{}\"", hintn_pin))
         })?;
 
-        let (reset_gpio_chip, reset_num) = find_gpio_by_symbol(reset_pin)?.ok_or_else(|| {
-            Error::new(
-                ErrorKind::AddrNotAvailable,
-                format!("Did not find reset pin \"{}\"", reset_pin),
-            )
+        let (reset_gpio_chip, reset_num) = find_gpio_by_symbol(reset_pin).ok_or_else(|| {
+            gpiocdev::Error::InvalidArgument(format!("Did not find reset pin \"{}\"", reset_pin))
         })?;
 
         Self::new_spi(
@@ -406,7 +378,6 @@ where
             if msg_count == 0 {
                 break;
             }
-            delay_us(100);
         }
     }
 
@@ -446,7 +417,6 @@ where
                 break;
             } else {
                 total_handled += handled_count;
-                delay_us(100);
             }
             i += 1
         }
@@ -941,7 +911,6 @@ where
             trace!("Eating advertisement response");
             self.handle_one_message(20);
             trace!("Eating reset response");
-            delay_us(100);
             self.handle_one_message(20);
         }
         self.verify_product_id()?;
