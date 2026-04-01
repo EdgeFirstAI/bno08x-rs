@@ -10,6 +10,7 @@
 //! dependencies.
 
 use std::{
+    fmt::{Debug, Display, Formatter},
     sync::{Arc, Condvar, Mutex},
     time::Duration,
 };
@@ -23,8 +24,8 @@ pub enum RecvError {
     Disconnected,
 }
 
-impl std::fmt::Display for RecvError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for RecvError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             RecvError::Timeout => write!(f, "recv_timeout: operation timed out"),
             RecvError::Disconnected => write!(f, "recv: channel disconnected, all senders dropped"),
@@ -34,11 +35,24 @@ impl std::fmt::Display for RecvError {
 
 impl std::error::Error for RecvError {}
 
+/// Error returned when sending to a channel with no receivers
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SendError<T>(pub T);
+
+impl<T: Debug> Display for SendError<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "send: channel disconnected, all receivers dropped")
+    }
+}
+
+impl<T: Debug> std::error::Error for SendError<T> {}
+
 /// Shared state for the watch channel
 struct Shared<T> {
     value: Mutex<T>,
     condvar: Condvar,
     num_senders: Mutex<usize>,
+    num_receivers: Mutex<usize>,
 }
 
 /// Sends values to all active receivers
@@ -70,9 +84,27 @@ impl<T> Drop for Sender<T> {
 }
 
 /// Receives values from a sender, with support for timeout-based waiting
-#[derive(Clone)]
 pub struct Receiver<T> {
     shared: Arc<Shared<T>>,
+}
+
+impl<T> Clone for Receiver<T> {
+    fn clone(&self) -> Self {
+        {
+            let mut num = self.shared.num_receivers.lock().expect("Mutex poisoned");
+            *num += 1;
+        }
+        Receiver {
+            shared: Arc::clone(&self.shared),
+        }
+    }
+}
+
+impl<T> Drop for Receiver<T> {
+    fn drop(&mut self) {
+        let mut num = self.shared.num_receivers.lock().expect("Mutex poisoned");
+        *num -= 1;
+    }
 }
 
 /// Creates a new watch channel with an initial value
@@ -81,6 +113,7 @@ pub fn channel<T: Clone>(initial: T) -> (Sender<T>, Receiver<T>) {
         value: Mutex::new(initial),
         condvar: Condvar::new(),
         num_senders: Mutex::new(1),
+        num_receivers: Mutex::new(1),
     });
 
     (
@@ -94,14 +127,21 @@ pub fn channel<T: Clone>(initial: T) -> (Sender<T>, Receiver<T>) {
 }
 
 impl<T: Clone> Sender<T> {
-    /// Sends a new value to all receivers and wakes them up
-    pub fn send(&self, value: T) {
+    /// Sends a new value to all receivers and wakes them up.
+    ///
+    /// Returns `Err(SendError(value))` if all receivers have been dropped.
+    pub fn send(&self, value: T) -> Result<(), SendError<T>> {
+        let num_receivers = *self.shared.num_receivers.lock().expect("Mutex poisoned");
+        if num_receivers == 0 {
+            return Err(SendError(value));
+        }
         {
             let mut state = self.shared.value.lock().expect("Mutex poisoned");
             *state = value;
         }
         // Notify all waiting receivers after releasing the lock
         self.shared.condvar.notify_all();
+        Ok(())
     }
 
     /// Returns a clone of the current value without waiting
@@ -211,7 +251,7 @@ mod tests {
             let tx = tx.clone();
             move || {
                 thread::sleep(Duration::from_millis(50));
-                tx.send(42);
+                tx.send(42).unwrap();
             }
         });
 
@@ -228,7 +268,7 @@ mod tests {
             let tx = tx.clone();
             move || {
                 thread::sleep(Duration::from_millis(50));
-                tx.send(100);
+                tx.send(100).unwrap();
             }
         });
 
@@ -256,7 +296,7 @@ mod tests {
         let handle3 = thread::spawn(move || rx3.recv());
 
         thread::sleep(Duration::from_millis(50));
-        tx.send(10);
+        tx.send(10).unwrap();
 
         let v1 = handle1.join().unwrap();
         let v2 = handle2.join().unwrap();
@@ -274,7 +314,7 @@ mod tests {
         assert_eq!(rx.borrow(), 5);
         assert_eq!(tx.borrow(), 5);
 
-        tx.send(15);
+        tx.send(15).unwrap();
 
         assert_eq!(rx.borrow(), 15);
         assert_eq!(tx.borrow(), 15);
@@ -286,10 +326,10 @@ mod tests {
 
         let handle = thread::spawn(move || {
             // Send same value - recv should not return
-            tx.send(42);
+            tx.send(42).unwrap();
             thread::sleep(Duration::from_millis(100));
             // Send different value - now recv should return
-            tx.send(99);
+            tx.send(99).unwrap();
         });
 
         let value = rx.recv_timeout(Duration::from_millis(500));
@@ -305,11 +345,11 @@ mod tests {
         let (tx, rx) = channel(0);
 
         let handle = thread::spawn(move || {
-            tx.send(1);
+            tx.send(1).unwrap();
             thread::sleep(Duration::from_millis(10));
-            tx.send(2);
+            tx.send(2).unwrap();
             thread::sleep(Duration::from_millis(10));
-            tx.send(3);
+            tx.send(3).unwrap();
         });
 
         assert_eq!(rx.recv(), Ok(1));
@@ -326,7 +366,7 @@ mod tests {
             let tx = tx.clone();
             move || {
                 thread::sleep(Duration::from_millis(50));
-                tx.send(99); // Send a value to wake up waiters
+                tx.send(99).unwrap(); // Send a value to wake up waiters
                 drop(tx); // Then drop the sender
             }
         });
@@ -350,5 +390,15 @@ mod tests {
         // Should immediately get Disconnected, not timeout
         let result = rx.recv_timeout(Duration::from_millis(500));
         assert_eq!(result, Err(RecvError::Disconnected));
+    }
+
+    #[test]
+    fn test_send_error_on_no_receivers() {
+        let (tx, rx) = channel(0);
+        drop(rx); // Drop the only receiver
+
+        // Send should return error with the value
+        let result = tx.send(42);
+        assert_eq!(result, Err(SendError(42)));
     }
 }

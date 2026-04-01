@@ -6,7 +6,7 @@ use gpiocdev::{
     line::{EdgeDetection, EdgeEvent, EdgeKind, Value},
     Request,
 };
-use std::sync::Arc;
+use std::{sync::Arc, thread::JoinHandle};
 
 use crate::watch_channel;
 pub enum PinState {
@@ -113,9 +113,22 @@ impl OutputPin for GpiodOut {
     }
 }
 
+struct JoinOnDrop(Option<JoinHandle<()>>);
+impl Drop for JoinOnDrop {
+    fn drop(&mut self) {
+        if let Some(handle) = self.0.take() {
+            if let Err(e) = handle.join() {
+                log::error!("Error joining thread: {:?}", e);
+            }
+        }
+    }
+}
+
 pub struct GpiodIn {
     input: Arc<Request>,
     rx: watch_channel::Receiver<EdgeEvent>,
+    _tx_handle: JoinOnDrop, /* _tx_handle must be after rx to ensure that the rx is dropped
+                             * before joining the thread */
 }
 impl GpiodIn {
     pub fn new(chip: &str, pin: u32) -> gpiocdev::Result<GpiodIn> {
@@ -134,7 +147,7 @@ impl GpiodIn {
         });
         let input = Arc::new(input);
         let input_clone = Arc::clone(&input);
-        std::thread::spawn(move || {
+        let tx_handle = std::thread::spawn(move || {
             for e in input_clone.edge_events() {
                 let Ok(mut e) = e else {
                     log::error!("Error reading edge event: {:?}", e);
@@ -144,11 +157,17 @@ impl GpiodIn {
                     Value::Active => e.kind = EdgeKind::Rising,
                     Value::Inactive => e.kind = EdgeKind::Falling,
                 }
-                tx.send(e);
+                if tx.send(e).is_err() {
+                    break; // All receivers dropped, stop the thread
+                }
             }
         });
 
-        Ok(GpiodIn { input, rx })
+        Ok(GpiodIn {
+            input,
+            rx,
+            _tx_handle: JoinOnDrop(Some(tx_handle)),
+        })
     }
 }
 
@@ -189,7 +208,6 @@ impl InputPin for GpiodIn {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
 
