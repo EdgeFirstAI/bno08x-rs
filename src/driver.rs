@@ -25,7 +25,7 @@
 //!
 //! # Example
 //!
-//! ```rust
+//! ```no_run
 //! use bno08x_rs::{BNO08x, DriverError, SENSOR_REPORTID_ACCELEROMETER};
 //! fn main() -> Result<(), DriverError> {
 //!     let mut imu = BNO08x::new_spi_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
@@ -153,7 +153,7 @@ impl std::fmt::Display for DriverError {
 ///
 /// # Example
 ///
-/// ```rust
+/// ```no_run
 /// use bno08x_rs::{BNO08x, DriverError, SENSOR_REPORTID_ROTATION_VECTOR};
 ///
 /// fn main() -> Result<(), DriverError> {
@@ -411,7 +411,7 @@ where
     ///
     /// # Example
     ///
-    /// ```rust
+    /// ```no_run
     /// use bno08x_rs::{BNO08x, DriverError};
     ///
     /// fn main() -> Result<(), DriverError> {
@@ -452,7 +452,7 @@ where
     ///
     /// # Example
     ///
-    /// ```rust
+    /// ```no_run
     /// use bno08x_rs::{BNO08x, DriverError};
     ///
     /// fn main() -> Result<(), DriverError> {
@@ -895,7 +895,7 @@ where
     ///
     /// # Example
     ///
-    /// ```rust
+    /// ```no_run
     /// # use bno08x_rs::{BNO08x, DriverError};
     /// let mut imu = BNO08x::new_spi_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
     /// imu.init().expect("Failed to initialize IMU");
