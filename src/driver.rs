@@ -25,10 +25,9 @@
 //!
 //! # Example
 //!
-//! ```no_run
-//! use bno08x_rs::{BNO08x, SENSOR_REPORTID_ACCELEROMETER};
-//!
-//! fn main() -> std::io::Result<()> {
+//! ```rust
+//! use bno08x_rs::{BNO08x, DriverError, SENSOR_REPORTID_ACCELEROMETER};
+//! fn main() -> Result<(), DriverError> {
 //!     let mut imu = BNO08x::new_spi_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
 //!     imu.init()?;
 //!     imu.enable_report(SENSOR_REPORTID_ACCELEROMETER, 100)?; // 10 Hz
@@ -79,11 +78,11 @@ use crate::{
 };
 use log::{debug, trace, warn};
 
-use core::ops::Shr;
+use core::{error, ops::Shr};
 use std::{
     collections::HashMap,
     fmt::Debug,
-    io::{self, ErrorKind},
+    io,
     time::{Instant, SystemTime},
 };
 
@@ -95,31 +94,44 @@ type ReportCallbackMap<'a, SI> = HashMap<String, Box<dyn Fn(&BNO08x<'a, SI>) + '
 /// This enum wraps communication errors from the underlying interface
 /// and adds driver-specific error conditions.
 #[derive(Debug)]
-pub enum DriverError<E> {
+pub enum DriverError {
     /// Communications error from the underlying SPI/I2C interface
-    CommError(E),
+    CommError(Box<dyn error::Error + Send + Sync>),
     /// Invalid chip ID was read during initialization
     InvalidChipId(u8),
     /// Unsupported sensor firmware version detected
     InvalidFWVersion(u8),
     /// Expected sensor data but none was available
     NoDataAvailable,
+    /// Error from GPIO
+    Gpio(gpiocdev::Error),
+    /// IO error
+    Io(io::Error),
 }
 
-impl<E: std::fmt::Debug> From<DriverError<E>> for io::Error {
-    fn from(err: DriverError<E>) -> Self {
-        match err {
-            DriverError::CommError(e) => io::Error::other(format!("Communication error: {:?}", e)),
-            DriverError::InvalidChipId(id) => {
-                io::Error::new(ErrorKind::InvalidData, format!("Invalid chip ID: {}", id))
-            }
-            DriverError::InvalidFWVersion(ver) => io::Error::new(
-                ErrorKind::InvalidData,
-                format!("Invalid firmware version: {}", ver),
-            ),
-            DriverError::NoDataAvailable => {
-                io::Error::new(ErrorKind::TimedOut, "No sensor data available")
-            }
+impl From<gpiocdev::Error> for DriverError {
+    fn from(err: gpiocdev::Error) -> Self {
+        DriverError::Gpio(err)
+    }
+}
+
+impl From<io::Error> for DriverError {
+    fn from(err: io::Error) -> Self {
+        DriverError::Io(err)
+    }
+}
+
+impl std::error::Error for DriverError {}
+
+impl std::fmt::Display for DriverError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DriverError::CommError(e) => write!(f, "Communication error: {:?}", e),
+            DriverError::InvalidChipId(id) => write!(f, "Invalid chip ID: {}", id),
+            DriverError::InvalidFWVersion(ver) => write!(f, "Invalid firmware version: {}", ver),
+            DriverError::NoDataAvailable => write!(f, "No sensor data available"),
+            DriverError::Gpio(e) => write!(f, "GPIO error: {:?}", e),
+            DriverError::Io(e) => write!(f, "IO error: {:?}", e),
         }
     }
 }
@@ -141,10 +153,10 @@ impl<E: std::fmt::Debug> From<DriverError<E>> for io::Error {
 ///
 /// # Example
 ///
-/// ```no_run
-/// use bno08x_rs::{BNO08x, SENSOR_REPORTID_ROTATION_VECTOR};
+/// ```rust
+/// use bno08x_rs::{BNO08x, DriverError, SENSOR_REPORTID_ROTATION_VECTOR};
 ///
-/// fn main() -> std::io::Result<()> {
+/// fn main() -> Result<(), DriverError> {
 ///     let mut imu = BNO08x::new_spi_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
 ///     imu.init()?;
 ///     imu.enable_report(SENSOR_REPORTID_ROTATION_VECTOR, 100)?;
@@ -313,7 +325,7 @@ impl<'a> BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>> {
         hintn_pin: u32,
         reset_gpiochip: &str,
         reset_pin: u32,
-    ) -> gpiocdev::Result<BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>>> {
+    ) -> Result<BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>>, DriverError> {
         let hintn = GpiodIn::new(hintn_gpiochip, hintn_pin)?;
         let reset = GpiodOut::new(reset_gpiochip, reset_pin)?;
 
@@ -345,7 +357,7 @@ impl<'a> BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>> {
         spidevice: &str,
         hintn_pin: &str,
         reset_pin: &str,
-    ) -> gpiocdev::Result<BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>>> {
+    ) -> Result<BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>>, DriverError> {
         let (hintn_gpio_chip, hintn_num) = find_gpio_by_symbol(hintn_pin).ok_or_else(|| {
             gpiocdev::Error::InvalidArgument(format!("Did not find hintn pin \"{}\"", hintn_pin))
         })?;
@@ -364,10 +376,10 @@ impl<'a> BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>> {
     }
 }
 
-impl<'a, SI, SE> BNO08x<'a, SI>
+impl<'a, SI> BNO08x<'a, SI>
 where
-    SI: SensorInterface<SensorError = SE>,
-    SE: core::fmt::Debug,
+    SI: SensorInterface,
+    SI::SensorError: error::Error + Send + Sync + 'static,
 {
     /// Consume all available messages on the port without processing them.
     ///
@@ -399,10 +411,10 @@ where
     ///
     /// # Example
     ///
-    /// ```no_run
-    /// use bno08x_rs::BNO08x;
+    /// ```rust
+    /// use bno08x_rs::{BNO08x, DriverError};
     ///
-    /// fn main() -> std::io::Result<()> {
+    /// fn main() -> Result<(), DriverError> {
     ///     let mut imu = BNO08x::new_spi_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
     ///     // Process up to 20 messages, waiting up to 10ms for each
     ///     let processed = imu.handle_messages(10, 20);
@@ -440,10 +452,10 @@ where
     ///
     /// # Example
     ///
-    /// ```no_run
-    /// use bno08x_rs::BNO08x;
+    /// ```rust
+    /// use bno08x_rs::{BNO08x, DriverError};
     ///
-    /// fn main() -> std::io::Result<()> {
+    /// fn main() -> Result<(), DriverError> {
     ///     let mut imu = BNO08x::new_spi_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
     ///     loop {
     ///         // Process all available messages, waiting up to 100ms
@@ -883,13 +895,13 @@ where
     ///
     /// # Example
     ///
-    /// ```no_run
-    /// # use bno08x_rs::BNO08x;
+    /// ```rust
+    /// # use bno08x_rs::{BNO08x, DriverError};
     /// let mut imu = BNO08x::new_spi_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
     /// imu.init().expect("Failed to initialize IMU");
-    /// # Ok::<(), std::io::Error>(())
+    /// # Ok::<(), DriverError>(())
     /// ```
-    pub fn init(&mut self) -> Result<(), DriverError<SE>> {
+    pub fn init(&mut self) -> Result<(), DriverError> {
         trace!("driver init");
 
         // Section 5.1.1.1: On system startup, the SHTP control application will send
@@ -897,7 +909,7 @@ where
         delay_us(100);
         self.sensor_interface
             .setup()
-            .map_err(DriverError::CommError)?;
+            .map_err(|e| DriverError::CommError(Box::new(e)))?;
 
         if self.sensor_interface.requires_soft_reset() {
             delay_us(100);
@@ -928,7 +940,7 @@ where
     pub fn enable_rotation_vector(
         &mut self,
         millis_between_reports: u16,
-    ) -> Result<bool, DriverError<SE>> {
+    ) -> Result<bool, DriverError> {
         self.enable_report(SENSOR_REPORTID_ROTATION_VECTOR, millis_between_reports)
     }
 
@@ -938,21 +950,21 @@ where
     pub fn enable_linear_accel(
         &mut self,
         millis_between_reports: u16,
-    ) -> Result<bool, DriverError<SE>> {
+    ) -> Result<bool, DriverError> {
         self.enable_report(SENSOR_REPORTID_LINEAR_ACCEL, millis_between_reports)
     }
 
     /// Enable reporting of calibrated gyroscope data.
     ///
     /// Returns true if the report was successfully enabled.
-    pub fn enable_gyro(&mut self, millis_between_reports: u16) -> Result<bool, DriverError<SE>> {
+    pub fn enable_gyro(&mut self, millis_between_reports: u16) -> Result<bool, DriverError> {
         self.enable_report(SENSOR_REPORTID_GYROSCOPE, millis_between_reports)
     }
 
     /// Enable reporting of gravity vector.
     ///
     /// Returns true if the report was successfully enabled.
-    pub fn enable_gravity(&mut self, millis_between_reports: u16) -> Result<bool, DriverError<SE>> {
+    pub fn enable_gravity(&mut self, millis_between_reports: u16) -> Result<bool, DriverError> {
         self.enable_report(SENSOR_REPORTID_GRAVITY, millis_between_reports)
     }
 
@@ -997,7 +1009,7 @@ where
         &mut self,
         report_id: u8,
         millis_between_reports: u16,
-    ) -> Result<bool, DriverError<SE>> {
+    ) -> Result<bool, DriverError> {
         self.enable_report_us(report_id, (millis_between_reports as u32) * 1000)
     }
 
@@ -1008,7 +1020,7 @@ where
         &mut self,
         report_id: u8,
         micros_between_reports: u32,
-    ) -> Result<bool, DriverError<SE>> {
+    ) -> Result<bool, DriverError> {
         trace!("enable_report 0x{:X}", report_id);
 
         let cmd_body: [u8; 17] = [
@@ -1109,7 +1121,7 @@ where
         word1: [u8; 4],
         word2: [u8; 4],
         timeout_ms: u128,
-    ) -> Result<(), DriverError<SE>> {
+    ) -> Result<(), DriverError> {
         let cmd_body_data = build_frs_write_data(offset, word1, word2);
         let _ = self.send_packet(CHANNEL_HUB_CONTROL, cmd_body_data.as_ref())?;
 
@@ -1130,7 +1142,7 @@ where
         qk: f32,
         qr: f32,
         timeout: u128,
-    ) -> Result<bool, DriverError<SE>> {
+    ) -> Result<bool, DriverError> {
         // Step 1: Request FRS write
         let length: u16 = 4;
         let cmd_body_req = build_frs_write_request(length, FRS_TYPE_SENSOR_ORIENTATION);
@@ -1181,7 +1193,7 @@ where
     }
 
     /// Send packet from our packet send buf
-    fn send_packet(&mut self, channel: u8, body_data: &[u8]) -> Result<usize, DriverError<SE>> {
+    fn send_packet(&mut self, channel: u8, body_data: &[u8]) -> Result<usize, DriverError> {
         let packet_length = self.prep_send_packet(channel, body_data);
 
         let rc = self
@@ -1190,7 +1202,7 @@ where
                 &self.packet_send_buf[..packet_length],
                 &mut self.packet_recv_buf,
             )
-            .map_err(DriverError::CommError)?;
+            .map_err(|e| DriverError::CommError(Box::new(e)))?;
         if rc > 0 {
             if let Err(e) = self.handle_received_packet(rc, SystemTime::now()) {
                 warn!("{:?}", e)
@@ -1203,13 +1215,13 @@ where
     pub(crate) fn receive_packet_with_timeout(
         &mut self,
         max_ms: usize,
-    ) -> Result<(usize, SystemTime), DriverError<SE>> {
+    ) -> Result<(usize, SystemTime), DriverError> {
         self.packet_recv_buf[0] = 0;
         self.packet_recv_buf[1] = 0;
         let (packet_len, timestamp) = self
             .sensor_interface
             .read_with_timeout(&mut self.packet_recv_buf, max_ms)
-            .map_err(DriverError::CommError)?;
+            .map_err(|e| DriverError::CommError(Box::new(e)))?;
 
         self.last_packet_len_received = packet_len;
 
@@ -1217,7 +1229,7 @@ where
     }
 
     /// Verify that the sensor returns an expected chip ID
-    fn verify_product_id(&mut self) -> Result<(), DriverError<SE>> {
+    fn verify_product_id(&mut self) -> Result<(), DriverError> {
         trace!("request PID...");
         let cmd_body: [u8; 2] = [
             SHUB_PROD_ID_REQ, // request product ID
@@ -1254,12 +1266,12 @@ where
     }
 
     /// Get accelerometer data [x, y, z] in m/s^2
-    pub fn accelerometer(&self) -> Result<[f32; 3], DriverError<SE>> {
+    pub fn accelerometer(&self) -> Result<[f32; 3], DriverError> {
         Ok(self.accelerometer)
     }
 
     /// Get rotation quaternion [i, j, k, real] (unit quaternion)
-    pub fn rotation_quaternion(&self) -> Result<[f32; 4], DriverError<SE>> {
+    pub fn rotation_quaternion(&self) -> Result<[f32; 4], DriverError> {
         Ok(self.rotation_quaternion)
     }
 
@@ -1269,12 +1281,12 @@ where
     }
 
     /// Get game rotation quaternion [i, j, k, real] (unit quaternion)
-    pub fn game_rotation_quaternion(&self) -> Result<[f32; 4], DriverError<SE>> {
+    pub fn game_rotation_quaternion(&self) -> Result<[f32; 4], DriverError> {
         Ok(self.game_rotation_quaternion)
     }
 
     /// Get geomagnetic rotation quaternion [i, j, k, real] (unit quaternion)
-    pub fn geomag_rotation_quaternion(&self) -> Result<[f32; 4], DriverError<SE>> {
+    pub fn geomag_rotation_quaternion(&self) -> Result<[f32; 4], DriverError> {
         Ok(self.geomag_rotation_quaternion)
     }
 
@@ -1284,27 +1296,27 @@ where
     }
 
     /// Get linear acceleration [x, y, z] in m/s^2 (gravity removed)
-    pub fn linear_accel(&self) -> Result<[f32; 3], DriverError<SE>> {
+    pub fn linear_accel(&self) -> Result<[f32; 3], DriverError> {
         Ok(self.linear_accel)
     }
 
     /// Get gravity vector [x, y, z] in m/s^2
-    pub fn gravity(&self) -> Result<[f32; 3], DriverError<SE>> {
+    pub fn gravity(&self) -> Result<[f32; 3], DriverError> {
         Ok(self.gravity)
     }
 
     /// Get calibrated gyroscope data [x, y, z] in rad/s
-    pub fn gyro(&self) -> Result<[f32; 3], DriverError<SE>> {
+    pub fn gyro(&self) -> Result<[f32; 3], DriverError> {
         Ok(self.gyro)
     }
 
     /// Get uncalibrated gyroscope data [x, y, z] in rad/s
-    pub fn gyro_uncalib(&self) -> Result<[f32; 3], DriverError<SE>> {
+    pub fn gyro_uncalib(&self) -> Result<[f32; 3], DriverError> {
         Ok(self.uncalib_gyro)
     }
 
     /// Get calibrated magnetic field [x, y, z] in uT (micro-Tesla)
-    pub fn mag_field(&self) -> Result<[f32; 3], DriverError<SE>> {
+    pub fn mag_field(&self) -> Result<[f32; 3], DriverError> {
         Ok(self.mag_field)
     }
 
@@ -1312,7 +1324,7 @@ where
     ///
     /// Normally applications should not need to call this directly,
     /// as it is called during `init`.
-    pub fn soft_reset(&mut self) -> Result<(), DriverError<SE>> {
+    pub fn soft_reset(&mut self) -> Result<(), DriverError> {
         trace!("soft_reset");
         let data: [u8; 1] = [EXECUTABLE_DEVICE_CMD_RESET];
         let received_len = self.send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
@@ -1330,7 +1342,7 @@ where
         &mut self,
         channel: u8,
         body_data: &[u8],
-    ) -> Result<usize, DriverError<SE>> {
+    ) -> Result<usize, DriverError> {
         let send_packet_length = self.prep_send_packet(channel, body_data);
 
         let recv_packet_length = self
@@ -1339,7 +1351,7 @@ where
                 self.packet_send_buf[..send_packet_length].as_ref(),
                 &mut self.packet_recv_buf,
             )
-            .map_err(DriverError::CommError)?;
+            .map_err(|e| DriverError::CommError(Box::new(e)))?;
 
         Ok(recv_packet_length)
     }
@@ -1367,6 +1379,14 @@ mod tests {
 
     #[derive(Debug)]
     struct MockError;
+
+    impl std::fmt::Display for MockError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "MockError")
+        }
+    }
+
+    impl std::error::Error for MockError {}
 
     impl SensorInterface for MockSensorInterface {
         type SensorError = MockError;
@@ -1408,39 +1428,6 @@ mod tests {
     // ==========================================================================
     // DriverError Tests
     // ==========================================================================
-
-    #[test]
-    fn test_driver_error_comm_error_to_io_error() {
-        let err: DriverError<&str> = DriverError::CommError("test error");
-        let io_err: io::Error = err.into();
-        assert!(io_err.to_string().contains("Communication error"));
-        assert!(io_err.to_string().contains("test error"));
-    }
-
-    #[test]
-    fn test_driver_error_invalid_chip_id_to_io_error() {
-        let err: DriverError<&str> = DriverError::InvalidChipId(0x42);
-        let io_err: io::Error = err.into();
-        assert_eq!(io_err.kind(), ErrorKind::InvalidData);
-        assert!(io_err.to_string().contains("Invalid chip ID"));
-        assert!(io_err.to_string().contains("66")); // 0x42 = 66
-    }
-
-    #[test]
-    fn test_driver_error_invalid_fw_version_to_io_error() {
-        let err: DriverError<&str> = DriverError::InvalidFWVersion(0x10);
-        let io_err: io::Error = err.into();
-        assert_eq!(io_err.kind(), ErrorKind::InvalidData);
-        assert!(io_err.to_string().contains("Invalid firmware version"));
-    }
-
-    #[test]
-    fn test_driver_error_no_data_available_to_io_error() {
-        let err: DriverError<&str> = DriverError::NoDataAvailable;
-        let io_err: io::Error = err.into();
-        assert_eq!(io_err.kind(), ErrorKind::TimedOut);
-        assert!(io_err.to_string().contains("No sensor data available"));
-    }
 
     // ==========================================================================
     // Cursor Reading Helper Tests

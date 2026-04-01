@@ -30,9 +30,9 @@
 //! ## Quick Start
 //!
 //! ```no_run
-//! use bno08x_rs::{BNO08x, SENSOR_REPORTID_ACCELEROMETER};
+//! use bno08x_rs::{BNO08x, DriverError, SENSOR_REPORTID_ACCELEROMETER};
 //!
-//! fn main() -> std::io::Result<()> {
+//! fn main() -> Result<(), DriverError> {
 //!     // Create driver using GPIO symbolic names
 //!     let mut imu = BNO08x::new_spi_from_symbol(
 //!         "/dev/spidev1.0", // SPI device
@@ -118,6 +118,32 @@ pub enum Error<CommE, PinE> {
 
     /// No data available from sensor (timeout waiting for HINTN)
     NoDataAvailable,
+}
+
+impl<CommE: std::fmt::Display, PinE: std::fmt::Display> std::fmt::Display for Error<CommE, PinE> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Comm(e) => write!(f, "Communication error: {}", e),
+            Error::Pin(e) => write!(f, "Pin error: {}", e),
+            Error::SensorUnresponsive => write!(f, "Sensor unresponsive"),
+            Error::BufferOverflow {
+                packet_size,
+                buffer_size,
+            } => write!(
+                f,
+                "Buffer overflow: packet size {} exceeds buffer size {}",
+                packet_size, buffer_size
+            ),
+            Error::NoDataAvailable => write!(f, "No data available"),
+        }
+    }
+}
+
+impl<CommE, PinE> std::error::Error for Error<CommE, PinE>
+where
+    CommE: std::fmt::Debug + std::fmt::Display,
+    PinE: std::fmt::Debug + std::fmt::Display,
+{
 }
 
 #[cfg(test)]

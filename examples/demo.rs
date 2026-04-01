@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use bno08x_rs::{
-    interface::delay::delay_ms, BNO08x, SENSOR_REPORTID_ACCELEROMETER, SENSOR_REPORTID_GYROSCOPE,
-    SENSOR_REPORTID_MAGNETIC_FIELD, SENSOR_REPORTID_ROTATION_VECTOR,
+    interface::delay::delay_ms, BNO08x, DriverError, SENSOR_REPORTID_ACCELEROMETER,
+    SENSOR_REPORTID_GYROSCOPE, SENSOR_REPORTID_MAGNETIC_FIELD, SENSOR_REPORTID_ROTATION_VECTOR,
 };
 use std::f32::consts::PI;
 
@@ -58,10 +58,10 @@ fn print_info(qat: [f32; 4], a: [f32; 3], g: [f32; 3], m: [f32; 3], ts: u128) {
     println!("{}", update);
 }
 
-fn main() -> gpiocdev::Result<()> {
+fn main() -> Result<(), DriverError> {
     let mut imu_driver = BNO08x::new_spi_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
 
-    imu_driver.init().unwrap();
+    imu_driver.init()?;
 
     let max_tries = 5;
 
