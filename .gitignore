@@ -12,3 +12,4 @@ sonar.py
 env.sh
 sonar-report.json
 TODO.md
+venv/
