@@ -21,3 +21,9 @@ pub fn delay_ms(ms: usize) {
     let time = Duration::from_millis(ms as u64);
     thread::sleep(time);
 }
+
+/// Microsecond delay
+pub fn delay_us(us: usize) {
+    let time = Duration::from_micros(us as u64);
+    thread::sleep(time);
+}

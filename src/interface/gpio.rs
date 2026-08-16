@@ -1,10 +1,14 @@
 // Copyright 2025 Au-Zone Technologies Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// extern crate gpiod;
 use ::std::ops::Not;
-use gpiod::{Chip, Input, Lines, Options, Output};
-use std::io;
+use gpiocdev::{
+    line::{EdgeDetection, EdgeEvent, EdgeKind, Value},
+    Request,
+};
+use std::{sync::Arc, thread::JoinHandle};
+
+use crate::watch_channel;
 pub enum PinState {
     /// Low pin state
     Low,
@@ -69,69 +73,144 @@ pub trait InputPin {
 
     /// Is the input pin low?
     fn is_low(&self) -> Result<bool, Self::Error>;
+
+    /// read events
+    fn read_event(&mut self) -> Result<EdgeEvent, Self::Error>;
+
+    /// read events, returns Ok(None) on timeout
+    fn read_event_with_timeout(
+        &mut self,
+        timeout: std::time::Duration,
+    ) -> Result<Option<EdgeEvent>, Self::Error>;
 }
 
 pub struct GpiodOut {
-    output: Lines<Output>,
+    output: Request,
 }
 impl GpiodOut {
-    pub fn new(chip: &Chip, pin: u32) -> io::Result<GpiodOut> {
-        let opts = Options::output([pin]) // configure lines offsets
-            .values([false]) // optionally set initial values
-            .consumer("imu-driver"); // optionally set consumer string
+    pub fn new(chip: &str, pin: u32) -> gpiocdev::Result<GpiodOut> {
+        let output = Request::builder()
+            .on_chip(chip)
+            .with_line(pin)
+            .as_output(Value::Inactive)
+            .request()?;
 
-        Ok(GpiodOut {
-            output: chip.request_lines(opts)?,
-        })
+        Ok(GpiodOut { output })
     }
 }
 
 impl OutputPin for GpiodOut {
-    type Error = io::Error;
+    type Error = gpiocdev::Error;
 
     fn set_low(&mut self) -> Result<(), Self::Error> {
-        self.output.set_values([false])?;
+        self.output.set_lone_value(Value::Inactive)?;
         Ok(())
     }
 
     fn set_high(&mut self) -> Result<(), Self::Error> {
-        self.output.set_values([true])?;
+        self.output.set_lone_value(Value::Active)?;
         Ok(())
     }
 }
 
+struct JoinOnDrop(Option<JoinHandle<()>>);
+impl Drop for JoinOnDrop {
+    fn drop(&mut self) {
+        if let Some(handle) = self.0.take() {
+            if let Err(e) = handle.join() {
+                log::error!("Error joining thread: {:?}", e);
+            }
+        }
+    }
+}
+
 pub struct GpiodIn {
-    input: Lines<Input>,
+    input: Arc<Request>,
+    rx: watch_channel::Receiver<EdgeEvent>,
+    _tx_handle: JoinOnDrop, /* _tx_handle must be after rx to ensure that the rx is dropped
+                             * before joining the thread */
 }
 impl GpiodIn {
-    pub fn new(chip: &Chip, pin: u32) -> io::Result<GpiodIn> {
-        let opts = Options::input([pin]) // configure lines offsets
-            .consumer("imu-driver"); // optionally set consumer string
+    pub fn new(chip: &str, pin: u32) -> gpiocdev::Result<GpiodIn> {
+        let input = Request::builder()
+            .on_chip(chip)
+            .with_line(pin)
+            .as_active_high()
+            .with_edge_detection(EdgeDetection::BothEdges)
+            .request()?;
+        let (tx, rx) = watch_channel::channel(EdgeEvent {
+            timestamp_ns: 0,
+            kind: gpiocdev::line::EdgeKind::Rising,
+            offset: pin,
+            seqno: 0,
+            line_seqno: 0,
+        });
+        let input = Arc::new(input);
+        let input_clone = Arc::clone(&input);
+        let tx_handle = std::thread::spawn(move || {
+            for e in input_clone.edge_events() {
+                let Ok(mut e) = e else {
+                    log::error!("Error reading edge event: {:?}", e);
+                    continue;
+                };
+                match input_clone.lone_value().unwrap() {
+                    Value::Active => e.kind = EdgeKind::Rising,
+                    Value::Inactive => e.kind = EdgeKind::Falling,
+                }
+                if tx.send(e).is_err() {
+                    break; // All receivers dropped, stop the thread
+                }
+            }
+        });
 
         Ok(GpiodIn {
-            input: chip.request_lines(opts)?,
+            input,
+            rx,
+            _tx_handle: JoinOnDrop(Some(tx_handle)),
         })
     }
 }
 
 impl InputPin for GpiodIn {
-    type Error = io::Error;
+    type Error = gpiocdev::Error;
 
     /// Is the input pin high?
     fn is_high(&self) -> Result<bool, Self::Error> {
-        let values = self.input.get_values([false])?;
-        Ok(values[0])
+        let values = self.input.lone_value()?;
+        Ok(values == Value::Active)
     }
 
     /// Is the input pin low?
     fn is_low(&self) -> Result<bool, Self::Error> {
-        let values = self.input.get_values([false])?;
-        Ok(!values[0])
+        let values = self.input.lone_value()?;
+        Ok(values == Value::Inactive)
+    }
+
+    /// Read events
+    fn read_event(&mut self) -> Result<EdgeEvent, Self::Error> {
+        self.rx
+            .recv()
+            .map_err(|e| gpiocdev::Error::InvalidArgument(format!("watch channel error: {:?}", e)))
+    }
+
+    /// Read events with a timeout
+    fn read_event_with_timeout(
+        &mut self,
+        timeout: std::time::Duration,
+    ) -> Result<Option<EdgeEvent>, Self::Error> {
+        let curr = self.rx.borrow();
+        if curr.kind == EdgeKind::Falling {
+            return Ok(Some(curr));
+        }
+        match self.rx.recv_timeout(timeout) {
+            Ok(value) => Ok(Some(value)),
+            Err(_) => Ok(None), // timeout or channel closed
+        }
     }
 }
-
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     // ==========================================================================
@@ -326,6 +405,27 @@ mod tests {
                 return Err(MockInputError);
             }
             Ok(!self.high)
+        }
+
+        fn read_event(&mut self) -> Result<EdgeEvent, Self::Error> {
+            if self.error_on_read {
+                return Err(MockInputError);
+            }
+            // Return a dummy event for testing
+            Ok(EdgeEvent {
+                timestamp_ns: 0,
+                kind: gpiocdev::line::EdgeKind::Falling,
+                offset: 0,
+                seqno: 0,
+                line_seqno: 0,
+            })
+        }
+
+        fn read_event_with_timeout(
+            &mut self,
+            _timeout: std::time::Duration,
+        ) -> Result<Option<EdgeEvent>, Self::Error> {
+            todo!()
         }
     }
 

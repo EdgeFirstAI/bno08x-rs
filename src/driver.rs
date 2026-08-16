@@ -26,9 +26,8 @@
 //! # Example
 //!
 //! ```no_run
-//! use bno08x_rs::{BNO08x, SENSOR_REPORTID_ACCELEROMETER};
-//!
-//! fn main() -> std::io::Result<()> {
+//! use bno08x_rs::{BNO08x, DriverError, SENSOR_REPORTID_ACCELEROMETER};
+//! fn main() -> Result<(), DriverError> {
 //!     let mut imu = BNO08x::new_spi_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
 //!     imu.init()?;
 //!     imu.enable_report(SENSOR_REPORTID_ACCELEROMETER, 100)?; // 10 Hz
@@ -70,7 +69,7 @@ use crate::{
         FRS_TYPE_SENSOR_ORIENTATION,
     },
     interface::{
-        delay::delay_ms,
+        delay::{delay_ms, delay_us},
         gpio::{GpiodIn, GpiodOut},
         spi::SpiControlLines,
         spidev::SpiDevice,
@@ -79,11 +78,11 @@ use crate::{
 };
 use log::{debug, trace, warn};
 
-use core::ops::Shr;
+use core::{error, ops::Shr};
 use std::{
     collections::HashMap,
     fmt::Debug,
-    io::{self, Error, ErrorKind},
+    io,
     time::{Instant, SystemTime},
 };
 
@@ -95,31 +94,44 @@ type ReportCallbackMap<'a, SI> = HashMap<String, Box<dyn Fn(&BNO08x<'a, SI>) + '
 /// This enum wraps communication errors from the underlying interface
 /// and adds driver-specific error conditions.
 #[derive(Debug)]
-pub enum DriverError<E> {
+pub enum DriverError {
     /// Communications error from the underlying SPI/I2C interface
-    CommError(E),
+    CommError(Box<dyn error::Error + Send + Sync>),
     /// Invalid chip ID was read during initialization
     InvalidChipId(u8),
     /// Unsupported sensor firmware version detected
     InvalidFWVersion(u8),
     /// Expected sensor data but none was available
     NoDataAvailable,
+    /// Error from GPIO
+    Gpio(gpiocdev::Error),
+    /// IO error
+    Io(io::Error),
 }
 
-impl<E: std::fmt::Debug> From<DriverError<E>> for io::Error {
-    fn from(err: DriverError<E>) -> Self {
-        match err {
-            DriverError::CommError(e) => io::Error::other(format!("Communication error: {:?}", e)),
-            DriverError::InvalidChipId(id) => {
-                io::Error::new(ErrorKind::InvalidData, format!("Invalid chip ID: {}", id))
-            }
-            DriverError::InvalidFWVersion(ver) => io::Error::new(
-                ErrorKind::InvalidData,
-                format!("Invalid firmware version: {}", ver),
-            ),
-            DriverError::NoDataAvailable => {
-                io::Error::new(ErrorKind::TimedOut, "No sensor data available")
-            }
+impl From<gpiocdev::Error> for DriverError {
+    fn from(err: gpiocdev::Error) -> Self {
+        DriverError::Gpio(err)
+    }
+}
+
+impl From<io::Error> for DriverError {
+    fn from(err: io::Error) -> Self {
+        DriverError::Io(err)
+    }
+}
+
+impl std::error::Error for DriverError {}
+
+impl std::fmt::Display for DriverError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DriverError::CommError(e) => write!(f, "Communication error: {:?}", e),
+            DriverError::InvalidChipId(id) => write!(f, "Invalid chip ID: {}", id),
+            DriverError::InvalidFWVersion(ver) => write!(f, "Invalid firmware version: {}", ver),
+            DriverError::NoDataAvailable => write!(f, "No sensor data available"),
+            DriverError::Gpio(e) => write!(f, "GPIO error: {:?}", e),
+            DriverError::Io(e) => write!(f, "IO error: {:?}", e),
         }
     }
 }
@@ -142,9 +154,9 @@ impl<E: std::fmt::Debug> From<DriverError<E>> for io::Error {
 /// # Example
 ///
 /// ```no_run
-/// use bno08x_rs::{BNO08x, SENSOR_REPORTID_ROTATION_VECTOR};
+/// use bno08x_rs::{BNO08x, DriverError, SENSOR_REPORTID_ROTATION_VECTOR};
 ///
-/// fn main() -> std::io::Result<()> {
+/// fn main() -> Result<(), DriverError> {
 ///     let mut imu = BNO08x::new_spi_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
 ///     imu.init()?;
 ///     imu.enable_report(SENSOR_REPORTID_ROTATION_VECTOR, 100)?;
@@ -230,7 +242,8 @@ pub struct BNO08x<'a, SI> {
     /// Which reports are enabled
     report_enabled: [bool; 16],
 
-    /// Timestamp of last update for each report
+    /// Timestamp of last update for each report, as nanoseconds since UNIX
+    /// epoch
     report_update_time: [u128; 16],
 
     /// Callbacks for report updates
@@ -292,20 +305,8 @@ impl<SI> BNO08x<'_, SI> {
 /// * `Ok(Some((chip_path, line_number)))` - If the pin was found
 /// * `Ok(None)` - If no pin with the given name was found
 /// * `Err(_)` - If there was an error accessing GPIO chips
-fn find_gpio_by_symbol(symbol: &str) -> io::Result<Option<(String, u32)>> {
-    let gpio_chips = gpiod::Chip::list_devices()?;
-
-    for entry in gpio_chips {
-        let chip = gpiod::Chip::new(&entry)?;
-        for i in 0..chip.num_lines() {
-            let line_info = chip.line_info(i)?;
-            trace!("--- {} ---", line_info.name);
-            if line_info.name == symbol {
-                return Ok(Some((entry.display().to_string(), i)));
-            }
-        }
-    }
-    Ok(None)
+fn find_gpio_by_symbol(symbol: &str) -> Option<(String, u32)> {
+    gpiocdev::find_named_line(symbol).map(|x| (x.chip.display().to_string(), x.info.offset))
 }
 
 impl<'a> BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>> {
@@ -324,19 +325,9 @@ impl<'a> BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>> {
         hintn_pin: u32,
         reset_gpiochip: &str,
         reset_pin: u32,
-    ) -> io::Result<BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>>> {
-        let hintn: GpiodIn;
-        let reset: GpiodOut;
-        if hintn_gpiochip == reset_gpiochip {
-            let chip = gpiod::Chip::new(hintn_gpiochip)?;
-            hintn = GpiodIn::new(&chip, hintn_pin)?;
-            reset = GpiodOut::new(&chip, reset_pin)?;
-        } else {
-            let chip0 = gpiod::Chip::new(hintn_gpiochip)?;
-            hintn = GpiodIn::new(&chip0, hintn_pin)?;
-            let chip1 = gpiod::Chip::new(reset_gpiochip)?;
-            reset = GpiodOut::new(&chip1, reset_pin)?;
-        }
+    ) -> Result<BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>>, DriverError> {
+        let hintn = GpiodIn::new(hintn_gpiochip, hintn_pin)?;
+        let reset = GpiodOut::new(reset_gpiochip, reset_pin)?;
 
         let spidev = SpiDevice::new(spidevice)?;
         let ctrl_lines: SpiControlLines<SpiDevice, GpiodIn, GpiodOut> =
@@ -366,19 +357,13 @@ impl<'a> BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>> {
         spidevice: &str,
         hintn_pin: &str,
         reset_pin: &str,
-    ) -> io::Result<BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>>> {
-        let (hintn_gpio_chip, hintn_num) = find_gpio_by_symbol(hintn_pin)?.ok_or_else(|| {
-            Error::new(
-                ErrorKind::AddrNotAvailable,
-                format!("Did not find hintn pin \"{}\"", hintn_pin),
-            )
+    ) -> Result<BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>>, DriverError> {
+        let (hintn_gpio_chip, hintn_num) = find_gpio_by_symbol(hintn_pin).ok_or_else(|| {
+            gpiocdev::Error::InvalidArgument(format!("Did not find hintn pin \"{}\"", hintn_pin))
         })?;
 
-        let (reset_gpio_chip, reset_num) = find_gpio_by_symbol(reset_pin)?.ok_or_else(|| {
-            Error::new(
-                ErrorKind::AddrNotAvailable,
-                format!("Did not find reset pin \"{}\"", reset_pin),
-            )
+        let (reset_gpio_chip, reset_num) = find_gpio_by_symbol(reset_pin).ok_or_else(|| {
+            gpiocdev::Error::InvalidArgument(format!("Did not find reset pin \"{}\"", reset_pin))
         })?;
 
         Self::new_spi(
@@ -391,10 +376,10 @@ impl<'a> BNO08x<'a, SpiInterface<SpiDevice, GpiodIn, GpiodOut>> {
     }
 }
 
-impl<'a, SI, SE> BNO08x<'a, SI>
+impl<'a, SI> BNO08x<'a, SI>
 where
-    SI: SensorInterface<SensorError = SE>,
-    SE: core::fmt::Debug,
+    SI: SensorInterface,
+    SI::SensorError: error::Error + Send + Sync + 'static,
 {
     /// Consume all available messages on the port without processing them.
     ///
@@ -406,7 +391,6 @@ where
             if msg_count == 0 {
                 break;
             }
-            delay_ms(1);
         }
     }
 
@@ -428,9 +412,9 @@ where
     /// # Example
     ///
     /// ```no_run
-    /// use bno08x_rs::BNO08x;
+    /// use bno08x_rs::{BNO08x, DriverError};
     ///
-    /// fn main() -> std::io::Result<()> {
+    /// fn main() -> Result<(), DriverError> {
     ///     let mut imu = BNO08x::new_spi_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
     ///     // Process up to 20 messages, waiting up to 10ms for each
     ///     let processed = imu.handle_messages(10, 20);
@@ -446,7 +430,6 @@ where
                 break;
             } else {
                 total_handled += handled_count;
-                delay_ms(1);
             }
             i += 1
         }
@@ -470,9 +453,9 @@ where
     /// # Example
     ///
     /// ```no_run
-    /// use bno08x_rs::BNO08x;
+    /// use bno08x_rs::{BNO08x, DriverError};
     ///
-    /// fn main() -> std::io::Result<()> {
+    /// fn main() -> Result<(), DriverError> {
     ///     let mut imu = BNO08x::new_spi_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
     ///     loop {
     ///         // Process all available messages, waiting up to 100ms
@@ -492,7 +475,6 @@ where
                 break;
             } else {
                 total_handled += handled_count;
-                delay_ms(1);
             }
         }
         total_handled
@@ -503,10 +485,10 @@ where
         let mut msg_count = 0;
 
         let res = self.receive_packet_with_timeout(max_ms);
-        if let Ok(received_len) = res {
+        if let Ok((received_len, timestamp)) = res {
             if received_len > 0 {
                 msg_count += 1;
-                if let Err(e) = self.handle_received_packet(received_len) {
+                if let Err(e) = self.handle_received_packet(received_len, timestamp) {
                     warn!("{:?}", e)
                 }
             }
@@ -520,7 +502,7 @@ where
     /// Receive and ignore one message, returning the packet size or zero
     pub fn eat_one_message(&mut self) -> usize {
         let res = self.receive_packet_with_timeout(150);
-        if let Ok(received_len) = res {
+        if let Ok((received_len, _)) = res {
             received_len
         } else {
             trace!("e1 err {:?}", res);
@@ -596,7 +578,7 @@ where
     }
 
     /// Handle parsing of an input report packet (may contain multiple reports)
-    fn handle_sensor_reports(&mut self, received_len: usize) {
+    fn handle_sensor_reports(&mut self, received_len: usize, timestamp: SystemTime) {
         let mut outer_cursor: usize = PACKET_HEADER_LENGTH + 5; // skip header, timestamp
         if received_len < outer_cursor {
             return;
@@ -616,7 +598,7 @@ where
                 Self::handle_one_input_report(outer_cursor, &self.packet_recv_buf[..received_len]);
             outer_cursor = inner_cursor;
 
-            let timestamp = SystemTime::now()
+            let timestamp = timestamp
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .map(|d| d.as_nanos())
                 .unwrap_or(0);
@@ -798,7 +780,11 @@ where
     }
 
     /// Handle a received packet and dispatch to appropriate handler
-    pub fn handle_received_packet(&mut self, received_len: usize) -> Result<(), Box<dyn Debug>> {
+    pub fn handle_received_packet(
+        &mut self,
+        received_len: usize,
+        timestamp: SystemTime,
+    ) -> Result<(), Box<dyn Debug>> {
         let mut rec_len = received_len;
         if rec_len > PACKET_RECV_BUF_LEN {
             warn!(
@@ -881,7 +867,7 @@ where
                 }
             },
             CHANNEL_SENSOR_REPORTS => {
-                self.handle_sensor_reports(rec_len);
+                self.handle_sensor_reports(rec_len, timestamp);
             }
             _ => {
                 self.last_chan_received = chan_num;
@@ -910,23 +896,23 @@ where
     /// # Example
     ///
     /// ```no_run
-    /// # use bno08x_rs::BNO08x;
+    /// # use bno08x_rs::{BNO08x, DriverError};
     /// let mut imu = BNO08x::new_spi_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
     /// imu.init().expect("Failed to initialize IMU");
-    /// # Ok::<(), std::io::Error>(())
+    /// # Ok::<(), DriverError>(())
     /// ```
-    pub fn init(&mut self) -> Result<(), DriverError<SE>> {
+    pub fn init(&mut self) -> Result<(), DriverError> {
         trace!("driver init");
 
         // Section 5.1.1.1: On system startup, the SHTP control application will send
         // its full advertisement response, unsolicited, to the host.
-        delay_ms(1);
+        delay_us(100);
         self.sensor_interface
             .setup()
-            .map_err(DriverError::CommError)?;
+            .map_err(|e| DriverError::CommError(Box::new(e)))?;
 
         if self.sensor_interface.requires_soft_reset() {
-            delay_ms(1);
+            delay_us(100);
             self.soft_reset()?;
             delay_ms(250);
             self.eat_all_messages();
@@ -935,11 +921,9 @@ where
         } else {
             // we only expect two messages after reset:
             // eat the advertisement response
-            delay_ms(250);
             trace!("Eating advertisement response");
             self.handle_one_message(20);
             trace!("Eating reset response");
-            delay_ms(250);
             self.handle_one_message(20);
         }
         self.verify_product_id()?;
@@ -956,7 +940,7 @@ where
     pub fn enable_rotation_vector(
         &mut self,
         millis_between_reports: u16,
-    ) -> Result<bool, DriverError<SE>> {
+    ) -> Result<bool, DriverError> {
         self.enable_report(SENSOR_REPORTID_ROTATION_VECTOR, millis_between_reports)
     }
 
@@ -966,25 +950,26 @@ where
     pub fn enable_linear_accel(
         &mut self,
         millis_between_reports: u16,
-    ) -> Result<bool, DriverError<SE>> {
+    ) -> Result<bool, DriverError> {
         self.enable_report(SENSOR_REPORTID_LINEAR_ACCEL, millis_between_reports)
     }
 
     /// Enable reporting of calibrated gyroscope data.
     ///
     /// Returns true if the report was successfully enabled.
-    pub fn enable_gyro(&mut self, millis_between_reports: u16) -> Result<bool, DriverError<SE>> {
+    pub fn enable_gyro(&mut self, millis_between_reports: u16) -> Result<bool, DriverError> {
         self.enable_report(SENSOR_REPORTID_GYROSCOPE, millis_between_reports)
     }
 
     /// Enable reporting of gravity vector.
     ///
     /// Returns true if the report was successfully enabled.
-    pub fn enable_gravity(&mut self, millis_between_reports: u16) -> Result<bool, DriverError<SE>> {
+    pub fn enable_gravity(&mut self, millis_between_reports: u16) -> Result<bool, DriverError> {
         self.enable_report(SENSOR_REPORTID_GRAVITY, millis_between_reports)
     }
 
-    /// Get the timestamp of the last update for a report
+    /// Get the timestamp of the last update for a report, as nanoseconds since
+    /// UNIX epoch.
     pub fn report_update_time(&self, report_id: u8) -> u128 {
         if report_id as usize <= self.report_enabled.len() {
             return self.report_update_time[report_id as usize];
@@ -1024,10 +1009,20 @@ where
         &mut self,
         report_id: u8,
         millis_between_reports: u16,
-    ) -> Result<bool, DriverError<SE>> {
+    ) -> Result<bool, DriverError> {
+        self.enable_report_us(report_id, (millis_between_reports as u32) * 1000)
+    }
+
+    /// Enable a sensor report with the specified update interval.
+    ///
+    /// Returns true if the report was successfully enabled.
+    pub fn enable_report_us(
+        &mut self,
+        report_id: u8,
+        micros_between_reports: u32,
+    ) -> Result<bool, DriverError> {
         trace!("enable_report 0x{:X}", report_id);
 
-        let micros_between_reports: u32 = (millis_between_reports as u32) * 1000;
         let cmd_body: [u8; 17] = [
             SHUB_REPORT_SET_FEATURE_CMD,
             report_id,
@@ -1051,9 +1046,9 @@ where
 
         let start = Instant::now();
         while !self.report_enabled[report_id as usize] && start.elapsed().as_millis() < 2000 {
-            if let Ok(received_len) = self.receive_packet_with_timeout(250) {
+            if let Ok((received_len, timestamp)) = self.receive_packet_with_timeout(250) {
                 if received_len > 0 {
-                    if let Err(e) = self.handle_received_packet(received_len) {
+                    if let Err(e) = self.handle_received_packet(received_len, timestamp) {
                         warn!("{:?}", e)
                     }
                 }
@@ -1082,9 +1077,9 @@ where
         while self.frs_write_status == FRS_STATUS_NO_DATA
             && start.elapsed().as_millis() < timeout_ms
         {
-            if let Ok(received_len) = self.receive_packet_with_timeout(250) {
+            if let Ok((received_len, timestamp)) = self.receive_packet_with_timeout(250) {
                 if received_len > 0 {
-                    if let Err(e) = self.handle_received_packet(received_len) {
+                    if let Err(e) = self.handle_received_packet(received_len, timestamp) {
                         warn!("{:?}", e)
                     }
                 }
@@ -1105,9 +1100,9 @@ where
             && self.frs_write_status != FRS_STATUS_WRITE_COMPLETE
             && start.elapsed().as_millis() < timeout_ms
         {
-            if let Ok(received_len) = self.receive_packet_with_timeout(250) {
+            if let Ok((received_len, timestamp)) = self.receive_packet_with_timeout(250) {
                 if received_len > 0 {
-                    if let Err(e) = self.handle_received_packet(received_len) {
+                    if let Err(e) = self.handle_received_packet(received_len, timestamp) {
                         warn!("{:?}", e)
                     }
                 }
@@ -1126,7 +1121,7 @@ where
         word1: [u8; 4],
         word2: [u8; 4],
         timeout_ms: u128,
-    ) -> Result<(), DriverError<SE>> {
+    ) -> Result<(), DriverError> {
         let cmd_body_data = build_frs_write_data(offset, word1, word2);
         let _ = self.send_packet(CHANNEL_HUB_CONTROL, cmd_body_data.as_ref())?;
 
@@ -1147,7 +1142,7 @@ where
         qk: f32,
         qr: f32,
         timeout: u128,
-    ) -> Result<bool, DriverError<SE>> {
+    ) -> Result<bool, DriverError> {
         // Step 1: Request FRS write
         let length: u16 = 4;
         let cmd_body_req = build_frs_write_request(length, FRS_TYPE_SENSOR_ORIENTATION);
@@ -1198,7 +1193,7 @@ where
     }
 
     /// Send packet from our packet send buf
-    fn send_packet(&mut self, channel: u8, body_data: &[u8]) -> Result<usize, DriverError<SE>> {
+    fn send_packet(&mut self, channel: u8, body_data: &[u8]) -> Result<usize, DriverError> {
         let packet_length = self.prep_send_packet(channel, body_data);
 
         let rc = self
@@ -1207,9 +1202,9 @@ where
                 &self.packet_send_buf[..packet_length],
                 &mut self.packet_recv_buf,
             )
-            .map_err(DriverError::CommError)?;
+            .map_err(|e| DriverError::CommError(Box::new(e)))?;
         if rc > 0 {
-            if let Err(e) = self.handle_received_packet(rc) {
+            if let Err(e) = self.handle_received_packet(rc, SystemTime::now()) {
                 warn!("{:?}", e)
             }
         }
@@ -1220,21 +1215,21 @@ where
     pub(crate) fn receive_packet_with_timeout(
         &mut self,
         max_ms: usize,
-    ) -> Result<usize, DriverError<SE>> {
+    ) -> Result<(usize, SystemTime), DriverError> {
         self.packet_recv_buf[0] = 0;
         self.packet_recv_buf[1] = 0;
-        let packet_len = self
+        let (packet_len, timestamp) = self
             .sensor_interface
             .read_with_timeout(&mut self.packet_recv_buf, max_ms)
-            .map_err(DriverError::CommError)?;
+            .map_err(|e| DriverError::CommError(Box::new(e)))?;
 
         self.last_packet_len_received = packet_len;
 
-        Ok(packet_len)
+        Ok((packet_len, timestamp))
     }
 
     /// Verify that the sensor returns an expected chip ID
-    fn verify_product_id(&mut self) -> Result<(), DriverError<SE>> {
+    fn verify_product_id(&mut self) -> Result<(), DriverError> {
         trace!("request PID...");
         let cmd_body: [u8; 2] = [
             SHUB_PROD_ID_REQ, // request product ID
@@ -1249,7 +1244,7 @@ where
             let response_size =
                 self.send_and_receive_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref())?;
             if response_size > 0 {
-                if let Err(e) = self.handle_received_packet(response_size) {
+                if let Err(e) = self.handle_received_packet(response_size, SystemTime::now()) {
                     warn!("{:?}", e)
                 }
             }
@@ -1258,7 +1253,7 @@ where
         // process all incoming messages until we get a product id (or no more data)
         while !self.prod_id_verified {
             trace!("read PID");
-            let msg_count = self.handle_one_message(150);
+            let msg_count = self.handle_one_message(300);
             if msg_count < 1 {
                 break;
             }
@@ -1271,12 +1266,12 @@ where
     }
 
     /// Get accelerometer data [x, y, z] in m/s^2
-    pub fn accelerometer(&self) -> Result<[f32; 3], DriverError<SE>> {
+    pub fn accelerometer(&self) -> Result<[f32; 3], DriverError> {
         Ok(self.accelerometer)
     }
 
     /// Get rotation quaternion [i, j, k, real] (unit quaternion)
-    pub fn rotation_quaternion(&self) -> Result<[f32; 4], DriverError<SE>> {
+    pub fn rotation_quaternion(&self) -> Result<[f32; 4], DriverError> {
         Ok(self.rotation_quaternion)
     }
 
@@ -1286,12 +1281,12 @@ where
     }
 
     /// Get game rotation quaternion [i, j, k, real] (unit quaternion)
-    pub fn game_rotation_quaternion(&self) -> Result<[f32; 4], DriverError<SE>> {
+    pub fn game_rotation_quaternion(&self) -> Result<[f32; 4], DriverError> {
         Ok(self.game_rotation_quaternion)
     }
 
     /// Get geomagnetic rotation quaternion [i, j, k, real] (unit quaternion)
-    pub fn geomag_rotation_quaternion(&self) -> Result<[f32; 4], DriverError<SE>> {
+    pub fn geomag_rotation_quaternion(&self) -> Result<[f32; 4], DriverError> {
         Ok(self.geomag_rotation_quaternion)
     }
 
@@ -1301,27 +1296,27 @@ where
     }
 
     /// Get linear acceleration [x, y, z] in m/s^2 (gravity removed)
-    pub fn linear_accel(&self) -> Result<[f32; 3], DriverError<SE>> {
+    pub fn linear_accel(&self) -> Result<[f32; 3], DriverError> {
         Ok(self.linear_accel)
     }
 
     /// Get gravity vector [x, y, z] in m/s^2
-    pub fn gravity(&self) -> Result<[f32; 3], DriverError<SE>> {
+    pub fn gravity(&self) -> Result<[f32; 3], DriverError> {
         Ok(self.gravity)
     }
 
     /// Get calibrated gyroscope data [x, y, z] in rad/s
-    pub fn gyro(&self) -> Result<[f32; 3], DriverError<SE>> {
+    pub fn gyro(&self) -> Result<[f32; 3], DriverError> {
         Ok(self.gyro)
     }
 
     /// Get uncalibrated gyroscope data [x, y, z] in rad/s
-    pub fn gyro_uncalib(&self) -> Result<[f32; 3], DriverError<SE>> {
+    pub fn gyro_uncalib(&self) -> Result<[f32; 3], DriverError> {
         Ok(self.uncalib_gyro)
     }
 
     /// Get calibrated magnetic field [x, y, z] in uT (micro-Tesla)
-    pub fn mag_field(&self) -> Result<[f32; 3], DriverError<SE>> {
+    pub fn mag_field(&self) -> Result<[f32; 3], DriverError> {
         Ok(self.mag_field)
     }
 
@@ -1329,24 +1324,25 @@ where
     ///
     /// Normally applications should not need to call this directly,
     /// as it is called during `init`.
-    pub fn soft_reset(&mut self) -> Result<(), DriverError<SE>> {
+    pub fn soft_reset(&mut self) -> Result<(), DriverError> {
         trace!("soft_reset");
         let data: [u8; 1] = [EXECUTABLE_DEVICE_CMD_RESET];
         let received_len = self.send_and_receive_packet(CHANNEL_EXECUTABLE, data.as_ref())?;
         if received_len > 0 {
-            if let Err(e) = self.handle_received_packet(received_len) {
+            if let Err(e) = self.handle_received_packet(received_len, SystemTime::now()) {
                 warn!("{:?}", e)
             }
         }
         Ok(())
     }
 
-    /// Send a packet and receive the response
+    /// Send a packet and receive a packet simultaneously, returning the length
+    /// of the received packet.
     fn send_and_receive_packet(
         &mut self,
         channel: u8,
         body_data: &[u8],
-    ) -> Result<usize, DriverError<SE>> {
+    ) -> Result<usize, DriverError> {
         let send_packet_length = self.prep_send_packet(channel, body_data);
 
         let recv_packet_length = self
@@ -1355,7 +1351,7 @@ where
                 self.packet_send_buf[..send_packet_length].as_ref(),
                 &mut self.packet_recv_buf,
             )
-            .map_err(DriverError::CommError)?;
+            .map_err(|e| DriverError::CommError(Box::new(e)))?;
 
         Ok(recv_packet_length)
     }
@@ -1384,6 +1380,14 @@ mod tests {
     #[derive(Debug)]
     struct MockError;
 
+    impl std::fmt::Display for MockError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "MockError")
+        }
+    }
+
+    impl std::error::Error for MockError {}
+
     impl SensorInterface for MockSensorInterface {
         type SensorError = MockError;
 
@@ -1404,8 +1408,8 @@ mod tests {
             &mut self,
             _recv_buf: &mut [u8],
             _max_ms: usize,
-        ) -> Result<usize, Self::SensorError> {
-            Ok(0)
+        ) -> Result<(usize, SystemTime), Self::SensorError> {
+            Ok((0, SystemTime::now()))
         }
 
         fn send_and_receive_packet(
@@ -1424,39 +1428,6 @@ mod tests {
     // ==========================================================================
     // DriverError Tests
     // ==========================================================================
-
-    #[test]
-    fn test_driver_error_comm_error_to_io_error() {
-        let err: DriverError<&str> = DriverError::CommError("test error");
-        let io_err: io::Error = err.into();
-        assert!(io_err.to_string().contains("Communication error"));
-        assert!(io_err.to_string().contains("test error"));
-    }
-
-    #[test]
-    fn test_driver_error_invalid_chip_id_to_io_error() {
-        let err: DriverError<&str> = DriverError::InvalidChipId(0x42);
-        let io_err: io::Error = err.into();
-        assert_eq!(io_err.kind(), ErrorKind::InvalidData);
-        assert!(io_err.to_string().contains("Invalid chip ID"));
-        assert!(io_err.to_string().contains("66")); // 0x42 = 66
-    }
-
-    #[test]
-    fn test_driver_error_invalid_fw_version_to_io_error() {
-        let err: DriverError<&str> = DriverError::InvalidFWVersion(0x10);
-        let io_err: io::Error = err.into();
-        assert_eq!(io_err.kind(), ErrorKind::InvalidData);
-        assert!(io_err.to_string().contains("Invalid firmware version"));
-    }
-
-    #[test]
-    fn test_driver_error_no_data_available_to_io_error() {
-        let err: DriverError<&str> = DriverError::NoDataAvailable;
-        let io_err: io::Error = err.into();
-        assert_eq!(io_err.kind(), ErrorKind::TimedOut);
-        assert!(io_err.to_string().contains("No sensor data available"));
-    }
 
     // ==========================================================================
     // Cursor Reading Helper Tests
@@ -2074,7 +2045,7 @@ mod tests {
         let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
 
         // Packet shorter than header length should return error
-        let result = driver.handle_received_packet(2);
+        let result = driver.handle_received_packet(2, SystemTime::now());
         assert!(result.is_err());
     }
 
@@ -2096,7 +2067,7 @@ mod tests {
 
         // Packet larger than buffer - should be clamped
         // The function should clamp to PACKET_RECV_BUF_LEN and process
-        let result = driver.handle_received_packet(PACKET_RECV_BUF_LEN + 100);
+        let result = driver.handle_received_packet(PACKET_RECV_BUF_LEN + 100, SystemTime::now());
         // Should succeed since we have valid data in the buffer
         assert!(result.is_ok());
     }
@@ -2115,7 +2086,7 @@ mod tests {
         driver.packet_recv_buf[4] = EXECUTABLE_DEVICE_RESP_RESET_COMPLETE;
 
         assert!(!driver.device_reset);
-        let result = driver.handle_received_packet(5);
+        let result = driver.handle_received_packet(5, SystemTime::now());
         assert!(result.is_ok());
         assert!(driver.device_reset);
     }
@@ -2131,7 +2102,7 @@ mod tests {
         driver.packet_recv_buf[3] = 0;
         driver.packet_recv_buf[4] = 0xFF; // Unknown report ID
 
-        let result = driver.handle_received_packet(5);
+        let result = driver.handle_received_packet(5, SystemTime::now());
         assert!(result.is_err());
         assert_eq!(driver.last_exec_chan_rid, 0xFF);
     }
@@ -2147,7 +2118,7 @@ mod tests {
         driver.packet_recv_buf[3] = 0;
         driver.packet_recv_buf[4] = 0x01;
 
-        let result = driver.handle_received_packet(5);
+        let result = driver.handle_received_packet(5, SystemTime::now());
         assert!(result.is_err());
         assert_eq!(driver.last_chan_received, 0xFE);
     }
@@ -2167,7 +2138,7 @@ mod tests {
         driver.packet_recv_buf[6] = SH2_INIT_SYSTEM;
 
         assert!(!driver.init_received);
-        let result = driver.handle_received_packet(8);
+        let result = driver.handle_received_packet(8, SystemTime::now());
         assert!(result.is_ok());
         assert!(driver.init_received);
     }
@@ -2188,7 +2159,7 @@ mod tests {
         driver.packet_recv_buf[7] = 5; // sw version minor
 
         assert!(!driver.prod_id_verified);
-        let result = driver.handle_received_packet(10);
+        let result = driver.handle_received_packet(10, SystemTime::now());
         assert!(result.is_ok());
         assert!(driver.prod_id_verified);
     }
@@ -2207,7 +2178,7 @@ mod tests {
         driver.packet_recv_buf[5] = SENSOR_REPORTID_ACCELEROMETER;
 
         assert!(!driver.report_enabled[SENSOR_REPORTID_ACCELEROMETER as usize]);
-        let result = driver.handle_received_packet(8);
+        let result = driver.handle_received_packet(8, SystemTime::now());
         assert!(result.is_ok());
         assert!(driver.report_enabled[SENSOR_REPORTID_ACCELEROMETER as usize]);
     }
@@ -2224,7 +2195,7 @@ mod tests {
         driver.packet_recv_buf[4] = SHUB_FRS_WRITE_RESP;
         driver.packet_recv_buf[5] = FRS_STATUS_WRITE_READY;
 
-        let result = driver.handle_received_packet(8);
+        let result = driver.handle_received_packet(8, SystemTime::now());
         assert!(result.is_ok());
         assert_eq!(driver.frs_write_status, FRS_STATUS_WRITE_READY);
     }
@@ -2240,7 +2211,7 @@ mod tests {
         driver.packet_recv_buf[3] = 0;
         driver.packet_recv_buf[4] = 0xFE; // Unknown report
 
-        let result = driver.handle_received_packet(8);
+        let result = driver.handle_received_packet(8, SystemTime::now());
         assert!(result.is_err());
     }
 
@@ -2255,7 +2226,7 @@ mod tests {
         driver.packet_recv_buf[3] = 0;
         driver.packet_recv_buf[4] = 0xFE; // Unknown report
 
-        let result = driver.handle_received_packet(8);
+        let result = driver.handle_received_packet(8, SystemTime::now());
         assert!(result.is_err());
         assert_eq!(driver.last_command_chan_rid, 0xFE);
     }
@@ -2276,7 +2247,7 @@ mod tests {
         driver.packet_recv_buf[4] = CMD_RESP_ERROR_LIST;
         driver.packet_recv_buf[5] = 0; // No errors
 
-        let result = driver.handle_received_packet(6);
+        let result = driver.handle_received_packet(6, SystemTime::now());
         assert!(result.is_ok());
         assert!(driver.error_list_received);
     }
@@ -2298,7 +2269,7 @@ mod tests {
         }
         driver.packet_recv_buf[18] = 0xFF; // Unknown error
 
-        let result = driver.handle_received_packet(18);
+        let result = driver.handle_received_packet(18, SystemTime::now());
         assert!(result.is_ok());
         assert!(driver.error_list_received);
     }
@@ -2339,7 +2310,7 @@ mod tests {
         driver.packet_recv_buf[17] = 0x00;
         driver.packet_recv_buf[18] = 0xFF;
 
-        let result = driver.handle_received_packet(19);
+        let result = driver.handle_received_packet(19, SystemTime::now());
         assert!(result.is_ok());
 
         let accel = driver.accelerometer().unwrap();
@@ -2373,7 +2344,7 @@ mod tests {
         driver.packet_recv_buf[19..21].copy_from_slice(&16384i16.to_le_bytes()); // real
         driver.packet_recv_buf[21..23].copy_from_slice(&0i16.to_le_bytes()); // accuracy
 
-        let result = driver.handle_received_packet(23);
+        let result = driver.handle_received_packet(23, SystemTime::now());
         assert!(result.is_ok());
 
         let quat = driver.rotation_quaternion().unwrap();
@@ -2399,7 +2370,7 @@ mod tests {
         driver.packet_recv_buf[17..19].copy_from_slice(&6270i16.to_le_bytes()); // ~0.383 in Q14
         driver.packet_recv_buf[19..21].copy_from_slice(&15137i16.to_le_bytes()); // ~0.924 in Q14
 
-        let result = driver.handle_received_packet(21);
+        let result = driver.handle_received_packet(21, SystemTime::now());
         assert!(result.is_ok());
     }
 
@@ -2422,7 +2393,7 @@ mod tests {
         driver.packet_recv_buf[19..21].copy_from_slice(&16384i16.to_le_bytes());
         driver.packet_recv_buf[21..23].copy_from_slice(&4096i16.to_le_bytes()); // accuracy
 
-        let result = driver.handle_received_packet(23);
+        let result = driver.handle_received_packet(23, SystemTime::now());
         assert!(result.is_ok());
     }
 
@@ -2443,7 +2414,7 @@ mod tests {
         driver.packet_recv_buf[15..17].copy_from_slice(&512i16.to_le_bytes());
         driver.packet_recv_buf[17..19].copy_from_slice(&768i16.to_le_bytes());
 
-        let result = driver.handle_received_packet(19);
+        let result = driver.handle_received_packet(19, SystemTime::now());
         assert!(result.is_ok());
 
         let accel = driver.linear_accel().unwrap();
@@ -2469,7 +2440,7 @@ mod tests {
         driver.packet_recv_buf[15..17].copy_from_slice(&0i16.to_le_bytes());
         driver.packet_recv_buf[17..19].copy_from_slice(&2509i16.to_le_bytes()); // ~9.8 m/s²
 
-        let result = driver.handle_received_packet(19);
+        let result = driver.handle_received_packet(19, SystemTime::now());
         assert!(result.is_ok());
 
         let gravity = driver.gravity().unwrap();
@@ -2494,7 +2465,7 @@ mod tests {
         driver.packet_recv_buf[15..17].copy_from_slice(&(-512i16).to_le_bytes());
         driver.packet_recv_buf[17..19].copy_from_slice(&256i16.to_le_bytes());
 
-        let result = driver.handle_received_packet(19);
+        let result = driver.handle_received_packet(19, SystemTime::now());
         assert!(result.is_ok());
 
         let gyro = driver.gyro().unwrap();
@@ -2520,7 +2491,7 @@ mod tests {
         driver.packet_recv_buf[15..17].copy_from_slice(&512i16.to_le_bytes());
         driver.packet_recv_buf[17..19].copy_from_slice(&768i16.to_le_bytes());
 
-        let result = driver.handle_received_packet(19);
+        let result = driver.handle_received_packet(19, SystemTime::now());
         assert!(result.is_ok());
     }
 
@@ -2542,7 +2513,7 @@ mod tests {
         driver.packet_recv_buf[15..17].copy_from_slice(&320i16.to_le_bytes()); // 20 µT
         driver.packet_recv_buf[17..19].copy_from_slice(&480i16.to_le_bytes()); // 30 µT
 
-        let result = driver.handle_received_packet(19);
+        let result = driver.handle_received_packet(19, SystemTime::now());
         assert!(result.is_ok());
 
         let mag = driver.mag_field().unwrap();
@@ -2566,7 +2537,7 @@ mod tests {
         driver.packet_recv_buf[10..19].copy_from_slice(&[0; 9]);
 
         // Should not crash, just ignore the unknown report
-        let result = driver.handle_received_packet(19);
+        let result = driver.handle_received_packet(19, SystemTime::now());
         assert!(result.is_ok());
     }
 
@@ -2590,7 +2561,7 @@ mod tests {
         driver.packet_recv_buf[6] = 0xFF; // Terminator
 
         assert!(!driver.advert_received);
-        let result = driver.handle_received_packet(10);
+        let result = driver.handle_received_packet(10, SystemTime::now());
         assert!(result.is_ok());
         assert!(driver.advert_received);
     }

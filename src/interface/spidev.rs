@@ -6,7 +6,7 @@ extern crate spidev;
 use log::trace;
 use spidev::{SpiModeFlags, Spidev, SpidevOptions, SpidevTransfer};
 
-use std::{io, path::Path, vec};
+use std::{io, path::Path};
 /// Blocking transfer
 pub trait Transfer {
     /// Error type
@@ -25,21 +25,32 @@ pub trait Write {
     fn write(&mut self, words: &[u8]) -> Result<(), Self::Error>;
 }
 
+/// Blocking Read
+pub trait Read {
+    /// Error type
+    type Error;
+
+    /// Reads `words` from the slave, ignoring all the outgoing words
+    fn read(&mut self, words: &mut [u8]) -> Result<(), Self::Error>;
+}
+
 pub struct SpiDevice {
     spi: Spidev,
+    tmp: Vec<u8>,
 }
 impl SpiDevice {
     pub fn new<P: AsRef<Path>>(path: P) -> io::Result<SpiDevice> {
         let mut spi = Spidev::open(path)?;
         let options = SpidevOptions::new()
             .bits_per_word(8)
-            .max_speed_hz(80_000)
+            .max_speed_hz(3_000_000) // max spi frequency for BNO085 is 3 MHz
             .mode(SpiModeFlags::SPI_MODE_3)
             .lsb_first(false)
             .build();
         spi.configure(&options)?;
 
-        Ok(SpiDevice { spi })
+        let tmp = Vec::with_capacity(2048);
+        Ok(SpiDevice { spi, tmp })
     }
 }
 
@@ -47,12 +58,10 @@ impl Transfer for SpiDevice {
     type Error = io::Error;
 
     fn transfer<'a>(&'a mut self, words: &'a mut [u8]) -> Result<&'a [u8], Self::Error> {
-        let mut rx_buf = vec![0_u8; words.len()];
-        let buf = rx_buf.as_mut();
+        self.tmp.resize(words.len(), 0);
         trace!("Transfer write: {:?}", words);
-        let mut transfer = SpidevTransfer::read_write(words, buf);
+        let mut transfer = SpidevTransfer::read_write_in_place(words);
         self.spi.transfer(&mut transfer)?;
-        words.clone_from_slice(buf);
         trace!("Transfer read: {:?}", words);
         Ok(words)
     }
@@ -63,11 +72,19 @@ impl Write for SpiDevice {
 
     fn write(&mut self, words: &[u8]) -> Result<(), Self::Error> {
         trace!("Write: {:?}", words);
-        let mut rx_buf = vec![0_u8; words.len()];
-        let buf = rx_buf.as_mut();
-        let mut transfer = SpidevTransfer::read_write(words, buf);
+        let mut transfer = SpidevTransfer::write(words);
         self.spi.transfer(&mut transfer)?;
-        trace!("Write read: {:?}", buf);
+        Ok(())
+    }
+}
+
+impl Read for SpiDevice {
+    type Error = io::Error;
+
+    fn read(&mut self, words: &mut [u8]) -> Result<(), Self::Error> {
+        trace!("Read: {:?}", words);
+        let mut transfer = SpidevTransfer::read(words);
+        self.spi.transfer(&mut transfer)?;
         Ok(())
     }
 }

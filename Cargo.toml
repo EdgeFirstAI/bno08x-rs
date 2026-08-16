@@ -23,7 +23,7 @@ path = "src/lib.rs"
 default = []
 
 [dependencies]
-gpiod = "0.3.0"
+gpiocdev = "0.8.0"
 log = "0.4.25"
 spidev = "0.7.1"
 

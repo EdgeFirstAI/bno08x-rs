@@ -2,16 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use bno08x_rs::{
-    interface::{
-        delay::delay_ms,
-        gpio::{GpiodIn, GpiodOut},
-        spidev::SpiDevice,
-        SpiInterface,
-    },
-    BNO08x, SENSOR_REPORTID_ACCELEROMETER, SENSOR_REPORTID_GYROSCOPE,
-    SENSOR_REPORTID_MAGNETIC_FIELD, SENSOR_REPORTID_ROTATION_VECTOR,
+    interface::delay::delay_ms, BNO08x, DriverError, SENSOR_REPORTID_ACCELEROMETER,
+    SENSOR_REPORTID_GYROSCOPE, SENSOR_REPORTID_MAGNETIC_FIELD, SENSOR_REPORTID_ROTATION_VECTOR,
 };
-use std::{f32::consts::PI, io};
+use std::f32::consts::PI;
 
 const RAD_TO_DEG: f32 = 180f32 / PI;
 
@@ -24,19 +18,16 @@ fn quaternion_to_euler(qr: f32, qi: f32, qj: f32, qk: f32) -> [f32; 3] {
     [yaw, pitch, roll]
 }
 
-fn print_info(imu_driver: &BNO08x<SpiInterface<SpiDevice, GpiodIn, GpiodOut>>) {
-    let [qi, qj, qk, qr] = imu_driver.rotation_quaternion().unwrap();
+fn print_info(qat: [f32; 4], a: [f32; 3], g: [f32; 3], m: [f32; 3], ts: u128) {
+    let [qi, qj, qk, qr] = qat;
     let [yaw, pitch, roll] = quaternion_to_euler(qr, qi, qj, qk);
-    let [ax, ay, az] = imu_driver.accelerometer().unwrap();
-    let [gx, gy, gz] = imu_driver.gyro().unwrap();
-    let [mx, my, mz] = imu_driver.mag_field().unwrap();
+    let [ax, ay, az] = a;
+    let [gx, gy, gz] = g;
+    let [mx, my, mz] = m;
 
     let attitude_message = format!(
-        "Attitude [degrees]: yaw={:.3}, pitch={:.3}, roll={:.3}, accuracy={:.3}",
-        yaw,
-        pitch,
-        roll,
-        imu_driver.rotation_acc()
+        "Attitude [degrees]: yaw={:.3}, pitch={:.3}, roll={:.3}",
+        yaw, pitch, roll,
     );
 
     let accelerometer_message = format!(
@@ -54,10 +45,7 @@ fn print_info(imu_driver: &BNO08x<SpiInterface<SpiDevice, GpiodIn, GpiodOut>>) {
         mx, my, mz
     );
 
-    let timestamp_message = format!(
-        "timestamp [ns]: {}",
-        imu_driver.report_update_time(SENSOR_REPORTID_ROTATION_VECTOR)
-    );
+    let timestamp_message = format!("timestamp [ns]: {}", ts);
     let update = format!(
         "{}\n{}\n{}\n{}\n{}\n",
         attitude_message,
@@ -70,18 +58,18 @@ fn print_info(imu_driver: &BNO08x<SpiInterface<SpiDevice, GpiodIn, GpiodOut>>) {
     println!("{}", update);
 }
 
-fn main() -> io::Result<()> {
+fn main() -> Result<(), DriverError> {
     let mut imu_driver = BNO08x::new_spi_from_symbol("/dev/spidev1.0", "IMU_INT", "IMU_RST")?;
 
-    imu_driver.init().unwrap();
+    imu_driver.init()?;
 
     let max_tries = 5;
 
     let reports = [
-        (SENSOR_REPORTID_ROTATION_VECTOR, 100),
-        (SENSOR_REPORTID_ACCELEROMETER, 300),
-        (SENSOR_REPORTID_GYROSCOPE, 300),
-        (SENSOR_REPORTID_MAGNETIC_FIELD, 300),
+        (SENSOR_REPORTID_ROTATION_VECTOR, 10),
+        (SENSOR_REPORTID_ACCELEROMETER, 10),
+        (SENSOR_REPORTID_GYROSCOPE, 10),
+        (SENSOR_REPORTID_MAGNETIC_FIELD, 10),
     ];
 
     for (r, t) in reports {
@@ -96,17 +84,36 @@ fn main() -> io::Result<()> {
             return Ok(());
         }
         println!("Report {} is enabled", r);
-        delay_ms(1000);
+        delay_ms(100);
     }
+
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    std::thread::Builder::new()
+        .name("print_info".to_string())
+        .spawn(move || {
+            for (qat, a, g, m, ts) in rx {
+                print_info(qat, a, g, m, ts);
+            }
+        })
+        .unwrap();
+
     imu_driver.add_sensor_report_callback(
         SENSOR_REPORTID_ROTATION_VECTOR,
         String::from("print_info"),
-        print_info,
+        move |imu_driver| {
+            let qat = imu_driver.rotation_quaternion().unwrap();
+            let a = imu_driver.accelerometer().unwrap();
+            let g = imu_driver.gyro().unwrap();
+            let m = imu_driver.mag_field().unwrap();
+            let ts = imu_driver.report_update_time(SENSOR_REPORTID_ROTATION_VECTOR);
+            tx.send((qat, a, g, m, ts)).unwrap();
+        },
     );
-    let loop_interval = 50;
-    println!("loop_interval: {}", loop_interval);
-    loop {
-        let _msg_count = imu_driver.handle_messages(10, 20);
-        delay_ms(loop_interval);
-    }
+    let msg_count = imu_driver.handle_all_messages(150);
+    print!(
+        "Program exited after handling {} msgs due to IMU not responding for over 150ms",
+        msg_count
+    );
+    Ok(())
 }
