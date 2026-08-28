@@ -16,7 +16,7 @@
 # Runner Notes:
 # - ubuntu-22.04: Standard GitHub-hosted runner (x86_64)
 # - ubuntu-22.04-arm: Custom larger runner (ARM64)
-# - raivin: Custom hardware runner with BNO08x sensor for integration tests
+# - raivin: Custom hardware runner with BNO08x sensor for integration tests (currently disabled)
 
 name: Test
 
@@ -190,8 +190,8 @@ jobs:
     name: Hardware Integration Tests
     needs: test
     runs-on: raivin
-    # Only run on main branch or when explicitly requested via label
-    if: github.ref == 'refs/heads/main' || contains(github.event.pull_request.labels.*.name, 'test-hardware')
+    # Disabled: raivin self-hosted runner is unavailable.
+    if: false
 
     steps:
       - name: Clean workspace (self-hosted runner)
