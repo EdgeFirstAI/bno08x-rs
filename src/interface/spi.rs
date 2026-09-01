@@ -1,12 +1,29 @@
 // Copyright 2025 Au-Zone Technologies Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use log::{error, trace};
+//! SPI transport for the BNO08x.
+//!
+//! # Timing model
+//!
+//! The BNO08x is an SPI slave that only participates in a transaction while
+//! it is awake and has signalled the host via H_INTN (active low). Two rules
+//! from the CEVA datasheet drive the design of this module:
+//!
+//! 1. After reset the sensor hub sleeps until a feature is enabled, and in SPI
+//!    mode the host can only wake it via the PS0/WAKE pin. On boards that strap
+//!    PS0 high there is no WAKE, so a write is only guaranteed to be accepted
+//!    while H_INTN is asserted (the sensor is awake and has a packet pending).
+//!    Every write here is therefore gated on H_INTN.
+//! 2. On the BNO085/BNO086 the host must service H_INTN within roughly 1/10 of
+//!    the fastest report period, otherwise the hub times out, retries and
+//!    starves its own processing. Packet reads therefore wait on the H_INTN
+//!    edge rather than sleeping for a fixed interval.
+
+use log::{debug, error, trace};
 
 use super::SensorInterface;
 use crate::{
     interface::{
-        delay::delay_ms,
         gpio::{InputPin, OutputPin},
         spidev::{Transfer, Write},
         SensorCommon, PACKET_HEADER_LENGTH,
@@ -14,7 +31,35 @@ use crate::{
     Error,
     Error::{BufferOverflow, NoDataAvailable, SensorUnresponsive},
 };
-use std::fmt::Debug;
+use std::{
+    fmt::Debug,
+    thread::sleep,
+    time::{Duration, Instant},
+};
+
+/// Interval between H_INTN polls. Short enough that a 5 ms rotation vector
+/// period is serviced well inside the datasheet's 1/10 period guidance.
+const HINTN_POLL_INTERVAL: Duration = Duration::from_micros(100);
+
+/// How long to wait after a hard reset for the sensor to start driving
+/// H_INTN high (datasheet t1 internal initialisation is at least 90 ms).
+const BOOT_TIMEOUT: Duration = Duration::from_millis(150);
+
+/// How long the sensor may take to assert H_INTN after a hard reset.
+const RESET_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// How long to wait for the sensor to re-assert H_INTN for the remainder of a
+/// packet after the header-only read deasserted chip select. The datasheet
+/// specifies re-assertion in microseconds; this is generous.
+const CONTINUATION_TIMEOUT: Duration = Duration::from_millis(5);
+
+/// How long a write may wait for the sensor to become ready. Right after
+/// reset the startup burst arrives within a few hundred milliseconds; once a
+/// report is enabled H_INTN asserts every report period.
+const WRITE_READY_TIMEOUT: Duration = Duration::from_millis(1000);
+
+/// Width of the reset pulse driven on RSTN.
+const RESET_PULSE: Duration = Duration::from_millis(2);
 
 /// Encapsulates all the lines required to operate this sensor
 /// - SCK: clock line from master
@@ -66,33 +111,57 @@ where
         self.hintn.is_low().unwrap_or(false)
     }
 
-    /// Wait for sensor to be ready.
-    /// After reset this can take around 120 ms
-    /// Return true if the sensor is awake, false if it doesn't wake up
-    /// `max_ms` maximum milliseconds to await for HINTN change
-    fn wait_for_sensor_awake(&mut self, max_ms: usize) -> bool {
-        for _ in 0..max_ms {
+    /// Wait for H_INTN to be asserted, polling at [`HINTN_POLL_INTERVAL`].
+    ///
+    /// Returns true as soon as the sensor signals it needs attention, false
+    /// if `timeout` elapses first. Always samples the line at least once so
+    /// a zero timeout acts as a non-blocking check.
+    fn wait_for_hintn(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        loop {
             if self.hintn_signaled() {
                 return true;
             }
-            delay_ms(1);
+            if Instant::now() >= deadline {
+                return false;
+            }
+            sleep(HINTN_POLL_INTERVAL);
         }
-
-        false
     }
 
-    /// block on HINTN for n cycles
-    fn block_on_hintn(&mut self, max_cycles: usize) -> bool {
-        for _ in 0..max_cycles {
-            if self.hintn_signaled() {
+    /// Wait for H_INTN to be deasserted (driven high by a running sensor).
+    fn wait_for_hintn_deasserted(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if !self.hintn_signaled() {
                 return true;
             }
-            delay_ms(1);
+            if Instant::now() >= deadline {
+                return false;
+            }
+            sleep(HINTN_POLL_INTERVAL);
         }
+    }
 
-        trace!("no hintn??");
+    /// Read the 4-byte SHTP header of the pending packet and return the
+    /// total packet length it announces (0 for an idle or garbage header).
+    fn read_header(&mut self, recv_buf: &mut [u8]) -> Result<usize, Error<CommE, PinE>> {
+        recv_buf[..PACKET_HEADER_LENGTH].fill(0);
+        self.spi
+            .transfer(&mut recv_buf[..PACKET_HEADER_LENGTH])
+            .map_err(Error::Comm)?;
+        Ok(SensorCommon::parse_packet_header(
+            &recv_buf[..PACKET_HEADER_LENGTH],
+        ))
+    }
 
-        false
+    /// After a header-only read has deasserted chip select the sensor
+    /// re-asserts H_INTN to offer the rest of the packet as a continuation.
+    /// Wait for that so the next transaction starts on a ready sensor.
+    fn wait_for_continuation(&self) {
+        if !self.wait_for_hintn(CONTINUATION_TIMEOUT) {
+            debug!("H_INTN not re-asserted for packet continuation, reading anyway");
+        }
     }
 }
 
@@ -124,39 +193,51 @@ where
         // reset cycle
 
         self.reset.set_low().map_err(Error::Pin)?;
-        delay_ms(2);
+        sleep(RESET_PULSE);
         self.reset.set_high().map_err(Error::Pin)?;
 
-        // wait for sensor to set hintn pin after reset
-        let ready = self.wait_for_sensor_awake(200);
-        if !ready {
+        // While the sensor boots (t1, at least 90 ms) its H_INTN output is
+        // not yet driven, so on a board whose pad defaults to a pull-down the
+        // line reads asserted before the sensor is alive. Wait for the sensor
+        // to drive H_INTN high first; on a pulled-up board this returns at
+        // once.
+        if !self.wait_for_hintn_deasserted(BOOT_TIMEOUT) {
+            debug!("H_INTN never deasserted after reset, assuming sensor drives it low from boot");
+        }
+
+        // The sensor asserts H_INTN once its advertisement is ready. From
+        // this point on the host must keep up: the startup burst is the only
+        // window in which a write is guaranteed to land without a WAKE pin.
+        if !self.wait_for_hintn(RESET_TIMEOUT) {
             return Err(SensorUnresponsive);
         }
 
         Ok(())
     }
 
+    /// Send a packet while reading whatever the sensor has pending.
+    ///
+    /// The write is gated on H_INTN: without a WAKE pin a write to a sleeping
+    /// sensor is silently discarded, so if the sensor does not signal
+    /// readiness within [`WRITE_READY_TIMEOUT`] this returns
+    /// [`NoDataAvailable`] rather than pretending the command was delivered.
     fn send_and_receive_packet(
         &mut self,
         send_buf: &[u8],
         recv_buf: &mut [u8],
     ) -> Result<usize, Self::SensorError> {
-        //zero the receive buffer
-        for i in recv_buf[..].iter_mut() {
-            *i = 0;
+        if !self.wait_for_hintn(WRITE_READY_TIMEOUT) {
+            error!("Sensor not ready (H_INTN idle) - write would be lost");
+            return Err(NoDataAvailable);
         }
 
-        let tmp = &mut [0u8; PACKET_HEADER_LENGTH];
-        // check how long the message to read is
-        let mut read_packet_len = 0;
-        let rc = self.spi.transfer(&mut tmp[..]);
-        if rc.is_ok() {
-            read_packet_len = SensorCommon::parse_packet_header(&tmp[..PACKET_HEADER_LENGTH]);
-        }
+        // Learn how long the pending packet is so the combined transfer
+        // clocks enough bytes to receive all of it.
+        let pending_len = self.read_header(recv_buf)?;
 
-        // Copy the write message into the buffer
+        recv_buf.fill(0);
         recv_buf[..send_buf.len()].copy_from_slice(send_buf);
-        let total_packet_len = std::cmp::max(read_packet_len, send_buf.len());
+        let total_packet_len = std::cmp::max(pending_len, send_buf.len());
         if total_packet_len > recv_buf.len() {
             error!(
                 "Total packet length ({}) greater than recv buffer size ({})",
@@ -168,12 +249,15 @@ where
                 buffer_size: recv_buf.len(),
             });
         }
-        delay_ms(5);
-        let rc = self.spi.transfer(&mut recv_buf[..total_packet_len]);
-        if rc.is_ok() {
-            read_packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
-        }
 
+        if pending_len > 0 {
+            self.wait_for_continuation();
+        }
+        self.spi
+            .transfer(&mut recv_buf[..total_packet_len])
+            .map_err(Error::Comm)?;
+
+        let read_packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
         if read_packet_len > 0 {
             self.received_packet_count += 1;
         }
@@ -181,38 +265,43 @@ where
     }
 
     fn write_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError> {
+        if !self.wait_for_hintn(WRITE_READY_TIMEOUT) {
+            error!("Sensor not ready (H_INTN idle) - write would be lost");
+            return Err(NoDataAvailable);
+        }
         self.spi.write(packet).map_err(Error::Comm)?;
         Ok(())
     }
 
-    /// Read a complete packet from the sensor
+    /// Read a complete packet from the sensor.
+    ///
+    /// Callers are expected to have observed H_INTN asserted (see
+    /// [`read_with_timeout`](Self::read_with_timeout)); this performs the
+    /// header read, waits for the continuation, then reads the body.
     fn read_packet(&mut self, recv_buf: &mut [u8]) -> Result<usize, Self::SensorError> {
-        if !self.block_on_hintn(1000) {
-            error!("No message to read - HINTN timeout");
+        if !self.wait_for_hintn(Duration::ZERO) {
+            error!("No message to read - H_INTN not asserted");
             return Err(NoDataAvailable);
         }
         // As soon as host selects CSN, HINTN resets
 
-        // check how long the message to read is
-        let mut read_packet_len = 0;
-        for i in recv_buf[..PACKET_HEADER_LENGTH].iter_mut() {
-            *i = 0;
-        }
-        let rc = self.spi.transfer(&mut recv_buf[..PACKET_HEADER_LENGTH]);
-        if rc.is_ok() {
-            read_packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
+        let read_packet_len = self.read_header(recv_buf)?;
+        if read_packet_len <= PACKET_HEADER_LENGTH {
+            // Idle sensor (zero packet) or header-only packet: nothing to
+            // read and nothing worth handing to the protocol layer.
+            return Ok(0);
         }
 
-        //zero the receive buffer
-        for i in recv_buf[..read_packet_len].iter_mut() {
-            *i = 0;
-        }
-        delay_ms(5);
-        let rc = self.spi.transfer(&mut recv_buf[..read_packet_len]);
-        if rc.is_ok() {
-            read_packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
-        }
+        // The sensor re-sends the header (with the continuation bit set and
+        // the length restated) followed by the cargo, so the whole announced
+        // length is transferred here.
+        recv_buf[..read_packet_len].fill(0);
+        self.wait_for_continuation();
+        self.spi
+            .transfer(&mut recv_buf[..read_packet_len])
+            .map_err(Error::Comm)?;
 
+        let read_packet_len = SensorCommon::parse_packet_header(&recv_buf[..PACKET_HEADER_LENGTH]);
         if read_packet_len > 0 {
             self.received_packet_count += 1;
         }
@@ -225,10 +314,9 @@ where
         recv_buf: &mut [u8],
         max_ms: usize,
     ) -> Result<usize, Self::SensorError> {
-        if self.wait_for_sensor_awake(max_ms) {
+        if self.wait_for_hintn(Duration::from_millis(max_ms as u64)) {
             return self.read_packet(recv_buf);
         }
-        // trace!("Sensor did not wake for read");
         Ok(0)
     }
 }

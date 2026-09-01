@@ -62,8 +62,9 @@ use crate::{
         SENSOR_REPORTID_GYROSCOPE_UNCALIB, SENSOR_REPORTID_LINEAR_ACCEL,
         SENSOR_REPORTID_MAGNETIC_FIELD, SENSOR_REPORTID_ROTATION_VECTOR,
         SENSOR_REPORTID_ROTATION_VECTOR_GAME, SENSOR_REPORTID_ROTATION_VECTOR_GEOMAGNETIC,
-        SH2_INIT_SYSTEM, SH2_STARTUP_INIT_UNSOLICITED, SHUB_COMMAND_RESP, SHUB_FRS_WRITE_RESP,
-        SHUB_GET_FEATURE_RESP, SHUB_PROD_ID_REQ, SHUB_PROD_ID_RESP, SHUB_REPORT_SET_FEATURE_CMD,
+        SH2_INIT_SYSTEM, SH2_STARTUP_INIT_UNSOLICITED, SHUB_COMMAND_RESP, SHUB_FRS_READ_RESP,
+        SHUB_FRS_WRITE_RESP, SHUB_GET_FEATURE_RESP, SHUB_PROD_ID_REQ, SHUB_PROD_ID_RESP,
+        SHUB_REPORT_SET_FEATURE_CMD,
     },
     frs::{
         build_frs_write_data, build_frs_write_request, quaternion_to_frs_words,
@@ -84,11 +85,38 @@ use std::{
     collections::HashMap,
     fmt::Debug,
     io::{self, Error, ErrorKind},
-    time::{Instant, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
 /// Type alias for sensor update callback functions
 type ReportCallbackMap<'a, SI> = HashMap<String, Box<dyn Fn(&BNO08x<'a, SI>) + 'a>>;
+
+/// How many times `init` requests the product ID before giving up (I2C). A
+/// request written while the hub is still finishing its own startup can be
+/// dropped.
+const PID_REQUEST_ATTEMPTS: u32 = 3;
+
+/// Time given to the hub, after it signals the advertisement, to queue its
+/// reset-complete and initialize responses before the host starts reading.
+/// Undisturbed, both follow the advertisement within a few tens of
+/// milliseconds.
+const STARTUP_SETTLE_MS: usize = 100;
+
+/// Upper bound on product ID requests piggybacked on startup packets (SPI).
+/// After the settle period startup completes within a handful of packets;
+/// the cap only guards against a hub that keeps talking without ever
+/// reporting startup, alongside the deadline.
+const MAX_STARTUP_PID_REQUESTS: u32 = 32;
+
+/// How long the hub may take to deliver its whole startup burst.
+const STARTUP_TIMEOUT_MS: u64 = 1000;
+
+/// Per-packet wait while draining the startup burst.
+const STARTUP_PACKET_TIMEOUT_MS: usize = 200;
+
+/// How long to wait for each packet while looking for the product ID
+/// response after a request.
+const PID_RESPONSE_TIMEOUT_MS: usize = 150;
 
 /// Driver-level errors that can occur during BNO08x operations.
 ///
@@ -406,7 +434,6 @@ where
             if msg_count == 0 {
                 break;
             }
-            delay_ms(1);
         }
     }
 
@@ -446,7 +473,6 @@ where
                 break;
             } else {
                 total_handled += handled_count;
-                delay_ms(1);
             }
             i += 1
         }
@@ -492,7 +518,6 @@ where
                 break;
             } else {
                 total_handled += handled_count;
-                delay_ms(1);
             }
         }
         total_handled
@@ -590,14 +615,15 @@ where
 
     fn handle_sensor_report_update(&mut self, report_id: u8, timestamp: u128) {
         self.report_update_time[report_id as usize] = timestamp;
-        for (_, val) in self.report_update_callbacks[report_id as usize].iter() {
+        for val in self.report_update_callbacks[report_id as usize].values() {
             val(self);
         }
     }
 
     /// Handle parsing of an input report packet (may contain multiple reports)
     fn handle_sensor_reports(&mut self, received_len: usize) {
-        let mut outer_cursor: usize = PACKET_HEADER_LENGTH + 5; // skip header, timestamp
+        // skip header and timestamp
+        let mut outer_cursor: usize = PACKET_HEADER_LENGTH + 5;
         if received_len < outer_cursor {
             return;
         }
@@ -797,6 +823,70 @@ where
         }
     }
 
+    /// Handle every report in a sensor hub control (channel 2) packet.
+    ///
+    /// The hub batches pending control reports into one SHTP packet (for
+    /// example the initialize response together with the product ID
+    /// responses), so all of them must be walked, not just the first.
+    fn handle_hub_control_reports(&mut self, rec_len: usize) -> Result<(), Box<dyn Debug>> {
+        let mut cursor = PACKET_HEADER_LENGTH;
+        while cursor < rec_len {
+            let report_id = self.packet_recv_buf[cursor];
+            let report_len = match report_id {
+                SHUB_COMMAND_RESP | SHUB_PROD_ID_RESP | SHUB_FRS_READ_RESP => 16,
+                SHUB_GET_FEATURE_RESP => 17,
+                SHUB_FRS_WRITE_RESP => 4,
+                _ => {
+                    let header = &self.packet_recv_buf[..PACKET_HEADER_LENGTH];
+                    if cursor == PACKET_HEADER_LENGTH {
+                        trace!("unh hbc: 0x{:X} {:x?}", report_id, header);
+                        return Err(Box::new(format!(
+                            "unknown hbc: 0x{:X} {:x?}",
+                            report_id, header
+                        )));
+                    }
+                    trace!(
+                        "unh hbc 0x{:X} at {} (after known reports)",
+                        report_id,
+                        cursor
+                    );
+                    return Ok(());
+                }
+            };
+            let avail = core::cmp::min(report_len, rec_len - cursor);
+            let msg = &self.packet_recv_buf[cursor..cursor + avail];
+            match report_id {
+                SHUB_COMMAND_RESP if avail > 2 => {
+                    let cmd_resp = msg[2];
+                    if cmd_resp == SH2_STARTUP_INIT_UNSOLICITED || cmd_resp == SH2_INIT_SYSTEM {
+                        self.init_received = true;
+                    }
+                    trace!("CMD_RESP: 0x{:X}", cmd_resp);
+                }
+                SHUB_PROD_ID_RESP if avail > 3 => {
+                    trace!("PID_RESP {}.{}", msg[2], msg[3]);
+                    self.prod_id_verified = true;
+                }
+                SHUB_GET_FEATURE_RESP if avail > 1 => {
+                    trace!("feat resp: {}", msg[1]);
+                    self.report_enabled[msg[1] as usize] = true;
+                }
+                SHUB_FRS_WRITE_RESP if avail > 1 => {
+                    trace!("write resp: {}", frs_status_to_str(msg[1]));
+                    self.frs_write_status = msg[1];
+                }
+                SHUB_FRS_READ_RESP => {
+                    trace!("frs read resp");
+                }
+                _ => {
+                    trace!("truncated hbc 0x{:X} ({} bytes)", report_id, avail);
+                }
+            }
+            cursor += report_len;
+        }
+        Ok(())
+    }
+
     /// Handle a received packet and dispatch to appropriate handler
     pub fn handle_received_packet(&mut self, received_len: usize) -> Result<(), Box<dyn Debug>> {
         let mut rec_len = received_len;
@@ -843,43 +933,9 @@ where
                     return Err(Box::new(format!("unknown exe: {}", report_id)));
                 }
             },
-            CHANNEL_HUB_CONTROL => match report_id {
-                SHUB_COMMAND_RESP => {
-                    let cmd_resp = msg[6];
-                    if cmd_resp == SH2_STARTUP_INIT_UNSOLICITED || cmd_resp == SH2_INIT_SYSTEM {
-                        self.init_received = true;
-                    }
-                    trace!("CMD_RESP: 0x{:X}", cmd_resp);
-                }
-                SHUB_PROD_ID_RESP => {
-                    {
-                        let _sw_vers_major = msg[4 + 2];
-                        let _sw_vers_minor = msg[4 + 3];
-                        trace!("PID_RESP {}.{}", _sw_vers_major, _sw_vers_major);
-                    }
-                    self.prod_id_verified = true;
-                }
-                SHUB_GET_FEATURE_RESP => {
-                    trace!("feat resp: {}", msg[5]);
-                    self.report_enabled[msg[5] as usize] = true;
-                }
-                SHUB_FRS_WRITE_RESP => {
-                    trace!("write resp: {}", frs_status_to_str(msg[5]));
-                    self.frs_write_status = msg[5];
-                }
-                _ => {
-                    trace!(
-                        "unh hbc: 0x{:X} {:x?}",
-                        report_id,
-                        &msg[..PACKET_HEADER_LENGTH]
-                    );
-                    return Err(Box::new(format!(
-                        "unknown hbc: 0x{:X} {:x?}",
-                        report_id,
-                        &msg[..PACKET_HEADER_LENGTH]
-                    )));
-                }
-            },
+            CHANNEL_HUB_CONTROL => {
+                self.handle_hub_control_reports(rec_len)?;
+            }
             CHANNEL_SENSOR_REPORTS => {
                 self.handle_sensor_reports(rec_len);
             }
@@ -899,13 +955,21 @@ where
     ///
     /// 1. Sets up the communication interface (SPI/GPIO)
     /// 2. Performs a soft reset if required by the interface
-    /// 3. Processes initial advertisement and reset responses
-    /// 4. Verifies the sensor product ID
+    /// 3. Requests the sensor product ID
+    ///
+    /// On SPI the startup burst is left pending and the product ID response
+    /// is processed asynchronously (see
+    /// [`product_id_verified`](Self::product_id_verified)). Without a WAKE
+    /// pin the hub sleeps as soon as it has nothing left to send and then
+    /// ignores writes, so callers must enable their first report immediately
+    /// after `init` returns, without sleeping in between.
     ///
     /// # Errors
     ///
-    /// Returns [`DriverError::CommError`] if communication fails, or
-    /// [`DriverError::InvalidChipId`] if the sensor doesn't respond correctly.
+    /// Returns [`DriverError::CommError`] if communication fails (including
+    /// the sensor not asserting H_INTN after reset), or
+    /// [`DriverError::InvalidChipId`] on I2C if the product ID is not
+    /// returned.
     ///
     /// # Example
     ///
@@ -918,9 +982,8 @@ where
     pub fn init(&mut self) -> Result<(), DriverError<SE>> {
         trace!("driver init");
 
-        // Section 5.1.1.1: On system startup, the SHTP control application will send
-        // its full advertisement response, unsolicited, to the host.
-        delay_ms(1);
+        // Section 5.1.1.1: On system startup, the SHTP control application
+        // will send its full advertisement response, unsolicited, to the host.
         self.sensor_interface
             .setup()
             .map_err(DriverError::CommError)?;
@@ -932,18 +995,78 @@ where
             self.eat_all_messages();
             delay_ms(250);
             self.eat_all_messages();
-        } else {
-            // we only expect two messages after reset:
-            // eat the advertisement response
-            delay_ms(250);
-            trace!("Eating advertisement response");
-            self.handle_one_message(20);
-            trace!("Eating reset response");
-            delay_ms(250);
-            self.handle_one_message(20);
+            self.verify_product_id()?;
+            return Ok(());
         }
-        self.verify_product_id()?;
-        delay_ms(100);
+
+        self.complete_startup()?;
+        Ok(())
+    }
+
+    /// Consume the SPI startup burst until the hub reports it is initialised.
+    ///
+    /// After reset the hub sends an advertisement, a reset-complete response
+    /// and an unsolicited initialize response, in no fixed order. Sensor
+    /// commands written before the initialize response are ignored, so
+    /// `init` must see both before returning. Without a WAKE pin the hub
+    /// sleeps as soon as its queue is empty and then ignores writes, so the
+    /// hub is first given time to queue its startup packets undisturbed, then
+    /// a product ID request is piggybacked on every startup packet read. The
+    /// hub batches pending control reports into one packet, so only a request
+    /// carried by the very last startup read is guaranteed to leave responses
+    /// pending; those responses are what the caller's first `enable_report`
+    /// rides on, by which time the hub is awake and initialised.
+    fn complete_startup(&mut self) -> Result<(), DriverError<SE>> {
+        self.device_reset = false;
+        self.init_received = false;
+        self.prod_id_verified = false;
+
+        delay_ms(STARTUP_SETTLE_MS);
+
+        let deadline = Instant::now() + Duration::from_millis(STARTUP_TIMEOUT_MS);
+        let mut requests_sent: u32 = 0;
+        while !(self.device_reset && self.init_received) {
+            if Instant::now() >= deadline {
+                warn!(
+                    "Hub startup incomplete (reset complete: {}, initialize: {})",
+                    self.device_reset, self.init_received
+                );
+                return Err(DriverError::NoDataAvailable);
+            }
+            if requests_sent < MAX_STARTUP_PID_REQUESTS {
+                requests_sent += 1;
+                self.request_product_id()?;
+            } else {
+                self.handle_one_message(STARTUP_PACKET_TIMEOUT_MS);
+            }
+        }
+        trace!("hub startup complete after {} PID requests", requests_sent);
+        Ok(())
+    }
+
+    /// Whether a product ID response has been received since the last reset.
+    ///
+    /// On SPI the response arrives asynchronously after [`init`](Self::init)
+    /// and is processed by the normal message handling (for example inside
+    /// [`enable_report`](Self::enable_report)).
+    pub fn product_id_verified(&self) -> bool {
+        self.prod_id_verified
+    }
+
+    /// Send the product ID request piggybacked on the pending startup packet
+    /// and process whatever the sensor sent in the same transfer.
+    fn request_product_id(&mut self) -> Result<(), DriverError<SE>> {
+        trace!("request PID...");
+        let cmd_body: [u8; 2] = [
+            SHUB_PROD_ID_REQ, // request product ID
+            0,                // reserved
+        ];
+        let response_size = self.send_and_receive_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref())?;
+        if response_size > 0 {
+            if let Err(e) = self.handle_received_packet(response_size) {
+                warn!("{:?}", e)
+            }
+        }
         Ok(())
     }
 
@@ -994,7 +1117,7 @@ where
 
     /// Check if a report is enabled
     pub fn is_report_enabled(&self, report_id: u8) -> bool {
-        if report_id as usize <= self.report_enabled.len() {
+        if (report_id as usize) < self.report_enabled.len() {
             return self.report_enabled[report_id as usize];
         }
         false
@@ -1059,7 +1182,6 @@ where
                 }
             }
         }
-        delay_ms(200);
         trace!(
             "Report {:x} is enabled: {}",
             report_id,
@@ -1233,7 +1355,9 @@ where
         Ok(packet_len)
     }
 
-    /// Verify that the sensor returns an expected chip ID
+    /// Verify that the sensor returns an expected chip ID (interfaces with a
+    /// soft reset, i.e. I2C; on SPI the product ID is requested during
+    /// `complete_startup` and checked with `product_id_verified`).
     fn verify_product_id(&mut self) -> Result<(), DriverError<SE>> {
         trace!("request PID...");
         let cmd_body: [u8; 2] = [
@@ -1241,33 +1365,29 @@ where
             0,                // reserved
         ];
 
-        // for some reason, reading PID right after sending request does not work with
-        // i2c
-        if self.sensor_interface.requires_soft_reset() {
+        for attempt in 1..=PID_REQUEST_ATTEMPTS {
             self.send_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref())?;
-        } else {
-            let response_size =
-                self.send_and_receive_packet(CHANNEL_HUB_CONTROL, cmd_body.as_ref())?;
-            if response_size > 0 {
-                if let Err(e) = self.handle_received_packet(response_size) {
-                    warn!("{:?}", e)
+
+            // process all incoming messages until we get a product id (or no
+            // more data)
+            while !self.prod_id_verified {
+                trace!("read PID");
+                let msg_count = self.handle_one_message(PID_RESPONSE_TIMEOUT_MS);
+                if msg_count < 1 {
+                    break;
                 }
             }
-        }
 
-        // process all incoming messages until we get a product id (or no more data)
-        while !self.prod_id_verified {
-            trace!("read PID");
-            let msg_count = self.handle_one_message(150);
-            if msg_count < 1 {
-                break;
+            if self.prod_id_verified {
+                return Ok(());
             }
+            debug!(
+                "No product ID response (attempt {}/{})",
+                attempt, PID_REQUEST_ATTEMPTS
+            );
         }
 
-        if !self.prod_id_verified {
-            return Err(DriverError::InvalidChipId(0));
-        }
-        Ok(())
+        Err(DriverError::InvalidChipId(0))
     }
 
     /// Get accelerometer data [x, y, z] in m/s^2
@@ -1857,7 +1977,8 @@ mod tests {
         assert_eq!(driver.packet_send_buf[0], 7); // LSB of length
         assert_eq!(driver.packet_send_buf[1], 0); // MSB of length
         assert_eq!(driver.packet_send_buf[2], CHANNEL_HUB_CONTROL);
-        assert_eq!(driver.packet_send_buf[3], 0); // sequence number (first packet)
+        assert_eq!(driver.packet_send_buf[3], 0); // sequence number (first
+                                                  // packet)
 
         // Check body
         assert_eq!(driver.packet_send_buf[4], 0x01);
@@ -2212,6 +2333,72 @@ mod tests {
         assert!(driver.report_enabled[SENSOR_REPORTID_ACCELEROMETER as usize]);
     }
 
+    #[test]
+    fn test_hub_control_batched_init_and_prod_id() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        // One SHTP packet carrying an initialize response followed by two
+        // product ID responses, as the hub batches them after reset.
+        let len = PACKET_HEADER_LENGTH + 16 + 16 + 16;
+        driver.packet_recv_buf[..len].fill(0);
+        driver.packet_recv_buf[0] = len as u8;
+        driver.packet_recv_buf[2] = CHANNEL_HUB_CONTROL;
+        driver.packet_recv_buf[4] = SHUB_COMMAND_RESP;
+        driver.packet_recv_buf[6] = SH2_STARTUP_INIT_UNSOLICITED;
+        driver.packet_recv_buf[4 + 16] = SHUB_PROD_ID_RESP;
+        driver.packet_recv_buf[4 + 16 + 2] = 3;
+        driver.packet_recv_buf[4 + 32] = SHUB_PROD_ID_RESP;
+
+        assert!(!driver.init_received);
+        assert!(!driver.prod_id_verified);
+        assert!(driver.handle_received_packet(len).is_ok());
+        assert!(driver.init_received);
+        assert!(driver.prod_id_verified);
+    }
+
+    #[test]
+    fn test_hub_control_batched_prod_id_then_feature_resp() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        // A product ID response followed by a get feature response for the
+        // rotation vector: the feature response must not be lost.
+        let len = PACKET_HEADER_LENGTH + 16 + 17;
+        driver.packet_recv_buf[..len].fill(0);
+        driver.packet_recv_buf[0] = len as u8;
+        driver.packet_recv_buf[2] = CHANNEL_HUB_CONTROL;
+        driver.packet_recv_buf[4] = SHUB_PROD_ID_RESP;
+        driver.packet_recv_buf[4 + 16] = SHUB_GET_FEATURE_RESP;
+        driver.packet_recv_buf[4 + 16 + 1] = SENSOR_REPORTID_ROTATION_VECTOR;
+
+        assert!(driver.handle_received_packet(len).is_ok());
+        assert!(driver.prod_id_verified);
+        assert!(driver.is_report_enabled(SENSOR_REPORTID_ROTATION_VECTOR));
+    }
+
+    #[test]
+    fn test_hub_control_unknown_report_after_known_is_ignored() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        let len = PACKET_HEADER_LENGTH + 16 + 4;
+        driver.packet_recv_buf[..len].fill(0);
+        driver.packet_recv_buf[0] = len as u8;
+        driver.packet_recv_buf[2] = CHANNEL_HUB_CONTROL;
+        driver.packet_recv_buf[4] = SHUB_PROD_ID_RESP;
+        driver.packet_recv_buf[4 + 16] = 0xEE; // not a hub control report
+
+        assert!(driver.handle_received_packet(len).is_ok());
+        assert!(driver.prod_id_verified);
+    }
+
+    #[test]
+    fn test_is_report_enabled_out_of_range() {
+        let mock = MockSensorInterface::new();
+        let driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+        assert!(!driver.is_report_enabled(u8::MAX));
+    }
     #[test]
     fn test_handle_received_packet_hub_control_frs_write_resp() {
         let mock = MockSensorInterface::new();

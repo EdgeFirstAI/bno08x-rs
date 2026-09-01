@@ -89,8 +89,8 @@ impl SensorCommon {
         if packet.len() < PACKET_HEADER_LENGTH {
             return 0;
         }
-        //Bits 14:0 are used to indicate the total number of bytes in the body plus
-        // header maximum packet length is ... PACKET_HEADER_LENGTH
+        //Bits 14:0 are used to indicate the total number of bytes in the body
+        // plus header maximum packet length is ... PACKET_HEADER_LENGTH
         let raw_pack_len: u16 =
             (packet[0] as u16) + ((packet[1] as u16) & CONTINUATION_FLAG_CLEAR).shl(8);
 

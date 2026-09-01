@@ -76,6 +76,8 @@ pub const SHUB_FRS_WRITE_REQ: u8 = 0xF7;
 pub const SHUB_FRS_WRITE_DATA_REQ: u8 = 0xF6;
 /// FRS write response
 pub const SHUB_FRS_WRITE_RESP: u8 = 0xF5;
+/// FRS read response
+pub const SHUB_FRS_READ_RESP: u8 = 0xF3;
 
 // =============================================================================
 // Sensor Report IDs (from SH2 Reference Manual)
@@ -302,7 +304,8 @@ mod tests {
 
     #[test]
     fn test_q_points_arrays() {
-        // Verify Q_POINTS and Q_POINTS2 arrays have same length (compile-time check)
+        // Verify Q_POINTS and Q_POINTS2 arrays have same length (compile-time
+        // check)
         const _: () = assert!(Q_POINTS.len() == Q_POINTS2.len());
 
         assert_eq!(
@@ -319,8 +322,9 @@ mod tests {
 
     #[test]
     fn test_buffer_sizes() {
-        // Verify buffer sizes are reasonable - constants are verified at compile time
-        // These values are known to be positive and correctly sized
+        // Verify buffer sizes are reasonable - constants are verified at
+        // compile time These values are known to be positive and
+        // correctly sized
         const _: () = assert!(PACKET_SEND_BUF_LEN > 0);
         const _: () = assert!(PACKET_RECV_BUF_LEN > 0);
         const _: () = assert!(PACKET_RECV_BUF_LEN >= PACKET_SEND_BUF_LEN);

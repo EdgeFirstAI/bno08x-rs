@@ -352,7 +352,7 @@ For CI/CD, hardware testing follows the **three-phase pattern** (see SPS 11-cicd
 
 ## Release
 
-**Semver:** MAJOR.MINOR.PATCH (currently 2.0.0)
+**Semver:** MAJOR.MINOR.PATCH (currently 3.0.0)
 **CHANGELOG:** Update during dev under [Unreleased], move to [X.Y.Z] at release
 **Pre-release:** `make pre-release` (lint+test+coverage+sbom)
 **Tag:** After main merge + CI green. `git tag -a vX.Y.Z && git push origin vX.Y.Z`
