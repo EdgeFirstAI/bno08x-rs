@@ -75,7 +75,6 @@ cargo run --example demo --release
 
 ```rust
 use bno08x_rs::{BNO08x, SENSOR_REPORTID_ROTATION_VECTOR, SENSOR_REPORTID_ACCELEROMETER};
-use bno08x_rs::interface::delay::delay_ms;
 
 fn main() -> std::io::Result<()> {
     // Create driver using GPIO symbolic names (recommended)
@@ -88,11 +87,15 @@ fn main() -> std::io::Result<()> {
     // Initialize the sensor
     imu.init().expect("Failed to initialize IMU");
 
-    // Enable sensor reports with update intervals (milliseconds)
+    // Enable sensor reports with update intervals (milliseconds).
+    // Enable the first report immediately after init(): the hub sleeps as
+    // soon as its startup packets are drained and cannot be woken over SPI.
     imu.enable_report(SENSOR_REPORTID_ROTATION_VECTOR, 100)?;  // 10 Hz
     imu.enable_report(SENSOR_REPORTID_ACCELEROMETER, 50)?;     // 20 Hz
 
-    // Main loop
+    // Main loop. handle_messages() blocks on the interrupt line, so no extra
+    // sleep is needed; keep servicing HINTN promptly (the BNO085/086 retries
+    // and loses processing time if the host is slow to respond).
     loop {
         // Process incoming sensor messages
         imu.handle_messages(10, 20);  // 10ms timeout, max 20 messages
@@ -103,8 +106,6 @@ fn main() -> std::io::Result<()> {
         
         println!("Quaternion: [{:.3}, {:.3}, {:.3}, {:.3}]", qi, qj, qk, qr);
         println!("Accel: [{:.3}, {:.3}, {:.3}] m/s²", ax, ay, az);
-        
-        delay_ms(50);
     }
 }
 ```

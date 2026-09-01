@@ -7,6 +7,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-09-01
+
+Fixes the BNO08x SPI transport, which could silently lose every command sent
+to a sleeping sensor hub and starve the hub's own report processing. On the
+Maivin platform this showed up as `edgefirst-imu` failing to initialise with
+`InvalidChipId(0)` and restarting roughly 2.5 times a minute; after this
+change the same device ran a ten-minute soak with zero restarts.
+
+### Breaking
+
+- `init()` on SPI no longer verifies the product ID before returning. The hub
+  sleeps as soon as its output queue is empty and, without a WAKE pin, cannot
+  be woken again, so `init()` now leaves the product ID responses pending for
+  the caller's first write instead of consuming them. Two consequences for
+  callers:
+  - **Enable the first report immediately after `init()` returns**, with no
+    sleep in between. A caller that waits will find the hub asleep and its
+    write rejected with `NoDataAvailable`.
+  - `init()` no longer returns `InvalidChipId` on SPI. Call the new
+    `product_id_verified()` after enabling the first report to confirm the
+    sensor identified itself.
+- The default SPI clock is raised from 80 kHz to 1 MHz. The BNO08x supports up
+  to 3 MHz, but wiring that only tolerated 80 kHz will need
+  `SpiDevice::new_with_speed()` to restore the old rate.
+- A write to a sensor that is not signalling H_INTN now fails with
+  `NoDataAvailable` rather than appearing to succeed. Code that ignored write
+  results will start seeing errors it previously never saw — those writes were
+  being discarded by the hardware all along.
+- `enable_report()` now returns `DriverError::UnsupportedReport` for a report
+  ID this driver does not track, where it previously panicked. `DriverError`
+  gains that variant, so exhaustive matches on it need a new arm.
+
+### Added
+
+- `BNO08x::product_id_verified()` reports whether a product ID response has
+  been received since the last reset.
+- `DriverError::UnsupportedReport(u8)` for report IDs outside the range the
+  driver tracks.
+- `SpiDevice::new_with_speed()` and `DEFAULT_SPI_SPEED_HZ` for callers that
+  need a different SPI clock.
+
+### Fixed
+
+- SPI writes are now gated on H_INTN so commands are no longer silently lost
+  when the sensor hub sleeps after reset (no WAKE pin on boards that strap PS0
+  high). A write on an idle sensor returns `NoDataAvailable` instead of
+  pretending success (EDGEAI-1100)
+- `init()` on SPI no longer drains the startup burst with fixed 250 ms sleeps
+  and a trailing 100 ms sleep; it lets the hub queue its startup packets, then
+  piggybacks product ID requests on the startup reads so that responses are
+  still pending when the caller enables its first report (EDGEAI-1100)
+- `init()` on SPI now waits for the hub to report both reset-complete and
+  initialize before returning; sensor commands written earlier were ignored by
+  the hub (EDGEAI-1100)
+- After a reset the driver waits for the sensor to drive H_INTN high before
+  waiting for it to assert. On a board whose pad defaults to a pull-down the
+  undriven line read as asserted while the sensor was still booting
+  (EDGEAI-1100)
+- Packet reads wait for the H_INTN continuation instead of a fixed 5 ms sleep,
+  and H_INTN is polled every 100 µs instead of every 1 ms, keeping the host
+  inside the BNO085/086 timing budget so rotation vector output is no longer
+  starved (EDGEAI-1100)
+- Sensor hub control packets are now parsed report by report: the hub batches
+  pending control reports (for example the initialize response together with
+  the product ID responses, or a product ID response together with a
+  get-feature response) into one SHTP packet, and only the first report used
+  to be seen, so `enable_report()` could miss its own acknowledgement
+  (EDGEAI-1100)
+- Report IDs from the device and from callers are bounds-checked everywhere
+  they index the driver's tracking arrays. Those arrays hold 16 entries while
+  report IDs are a `u8`, and the sensor's own advertisement lists IDs up to
+  0x2E, so `enable_report()`, `report_update_time()`,
+  `add_sensor_report_callback()`, `remove_sensor_report_callback()` and the
+  handler for a get-feature response could all panic on a report ID the driver
+  does not track — reachable from a corrupted read as well as from valid data
+- `is_report_enabled()` off-by-one bounds check
+- `send_and_receive_packet()` checks that the outgoing packet fits the receive
+  buffer before copying into it, rather than after
+
+### Changed
+
+- `SpiDevice` reuses a fixed receive buffer instead of allocating on every
+  transfer.
+- Removed the 1 ms sleeps between messages in `handle_messages()`,
+  `handle_all_messages()` and `eat_all_messages()`, and the 200 ms sleep at
+  the end of `enable_report()`.
+
 ## [2.0.1] - 2025-12-22
 
 ### Changed
@@ -212,7 +299,8 @@ The following APIs remain unchanged and require no migration:
   - Error reporting and handling
   - Feature enable/disable commands
 
-[Unreleased]: https://github.com/EdgeFirstAI/bno08x-rs/compare/v2.0.1...HEAD
+[Unreleased]: https://github.com/EdgeFirstAI/bno08x-rs/compare/v3.0.0...HEAD
+[3.0.0]: https://github.com/EdgeFirstAI/bno08x-rs/compare/v2.0.1...v3.0.0
 [2.0.1]: https://github.com/EdgeFirstAI/bno08x-rs/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/EdgeFirstAI/bno08x-rs/compare/v1.0.1...v2.0.0
 [1.0.1]: https://github.com/EdgeFirstAI/bno08x-rs/releases/tag/v1.0.1

@@ -239,15 +239,16 @@ SPI-specific implementation:
 
 - **`SpiInterface<SPI, IN, RSTN>`**: Implements `SensorInterface` for SPI
   - Hardware interrupt monitoring (HINTN pin - active low)
-  - Reset sequencing (low → high transition)
-  - Two-phase packet transfer (header read, then full packet)
-  - Error recovery with timeout handling
+  - Reset sequencing (low → high transition, then wait for the sensor to drive HINTN high and finally assert it)
+  - Two-phase packet transfer (header read, wait for the HINTN continuation, then full packet)
+  - Every write gated on HINTN: without a WAKE pin a sleeping hub drops writes, so an idle hub yields `NoDataAvailable` instead of a silently lost command
 
 **Key Implementation Details:**
 
 - `hintn_signaled()`: Returns true when HINTN is low (sensor has data)
-- `wait_for_sensor_awake()`: Blocks up to specified milliseconds for HINTN
-- `block_on_hintn()`: Similar blocking wait with cycle count
+- `wait_for_hintn(timeout)`: Polls HINTN every 100 µs until asserted or the timeout elapses (a zero timeout is a non-blocking check)
+- `wait_for_hintn_deasserted(timeout)`: The inverse, used after reset to detect that the sensor is alive and driving the line
+- `wait_for_continuation()`: Waits for the sensor to re-offer the rest of a packet after the header-only read
 - `requires_soft_reset()`: Returns `false` for SPI (uses hardware reset)
 
 #### `interface/spidev.rs`
@@ -259,8 +260,9 @@ Linux spidev wrapper with custom traits:
 
 - **`SpiDevice`**: Wraps Linux `spidev` for SPI communication
   - Configured for SPI_MODE_3
-  - 80 kHz clock speed
+  - 1 MHz clock speed by default (`DEFAULT_SPI_SPEED_HZ`), overridable with `new_with_speed()`; the BNO08x supports up to 3 MHz
   - 8 bits per word, MSB first
+  - Fixed receive scratch buffer, no per-transfer allocation
 
 #### `interface/gpio.rs`
 
@@ -475,18 +477,21 @@ packet-beta
 
 ## Initialization Sequence
 
-1. **Hardware Reset**: Toggle RSTN pin (high → low → high with 2ms delay)
-2. **Wait for HINTN**: Sensor asserts interrupt when ready (up to 200ms)
-3. **Read Advertisement**: Sensor sends unsolicited advertisement packet
-4. **Read Reset Response**: Sensor confirms reset completion
-5. **Soft Reset** (I2C only): Send reset command for interfaces requiring it
-6. **Verify Product ID**: Request and validate sensor product ID (0xF9/0xF8)
-7. **Enable Reports**: Configure desired sensor reports with update rates
+1. **Hardware Reset**: Toggle RSTN pin (high → low → high with 2ms pulse)
+2. **Wait for boot**: Wait for the sensor to drive HINTN high (up to 150ms). While the sensor boots the line is undriven, so on a board whose pad defaults to a pull-down it would otherwise read as asserted too early
+3. **Wait for HINTN**: Sensor asserts interrupt when its advertisement is ready (up to 500ms)
+4. **Settle**: Give the hub 100ms to queue its reset-complete and initialize responses undisturbed
+5. **Drain startup burst**: Read packets until both reset-complete and initialize have been seen (1s deadline), piggybacking a product ID request (0xF9) on every read. The hub batches pending control reports into one packet, so only the request on the last startup read is guaranteed to leave responses pending
+6. **Soft Reset + Verify Product ID** (I2C only): Send reset command, then request and validate the product ID
+7. **Enable Reports**: Configure desired sensor reports with update rates. The first `enable_report` must follow `init` immediately: it rides on the pending product ID responses, after which the streaming reports keep the hub awake
+
+The BNO08x has no way to be woken over SPI other than the PS0/WAKE pin, which this driver does not use (boards typically strap PS0 high). After reset the hub sleeps as soon as its output queue is empty and silently ignores writes, so every write is gated on HINTN being asserted and fails with `NoDataAvailable` if the hub is idle.
 
 ```rust
 // Typical initialization
-imu.init()?;                                    // Hardware setup + product ID verification
-imu.enable_report(SENSOR_REPORTID_ROTATION_VECTOR, 100)?;  // 100ms interval
+imu.init()?;                                    // Hardware setup + product ID request
+imu.enable_report(SENSOR_REPORTID_ROTATION_VECTOR, 100)?;  // 100ms interval, immediately
+assert!(imu.product_id_verified());             // response processed during enable_report
 ```
 
 ## Callback System
@@ -591,12 +596,13 @@ FRS write sequence:
 
 ### Timing
 
-- **SPI speed**: 80 kHz (configured for reliable communication)
+- **SPI speed**: 1 MHz default (BNO08x maximum is 3 MHz)
 - **SPI mode**: MODE_3 (CPOL=1, CPHA=1)
 - **Report rates**: Configurable from 1 Hz to 1 kHz (gyro-limited)
-- **Post-reset wait**: 200ms for sensor to assert HINTN
-- **Polling interval**: Recommended 50ms for main loop
-- **Inter-packet delay**: 5ms between SPI transfers
+- **Post-reset wait**: up to 150ms for the sensor to drive HINTN high, then up to 500ms for it to assert HINTN
+- **HINTN polling**: every 100 µs. The BNO085/086 times out and retries if HINTN is not serviced within about 10ms, and starves its own processing when the host is slower than roughly 1/10 of the fastest report period
+- **Packet continuation**: after the header-only read the body read waits for HINTN to re-assert (up to 5ms) instead of sleeping a fixed 5ms
+- **Write readiness**: a write waits up to 1s for HINTN before failing with `NoDataAvailable`
 
 ### Memory Allocation
 

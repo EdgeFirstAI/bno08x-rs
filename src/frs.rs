@@ -191,7 +191,8 @@ mod tests {
 
     #[test]
     fn test_frs_status_coverage() {
-        // Ensure the status check functions return false for other status values
+        // Ensure the status check functions return false for other status
+        // values
         assert!(!is_write_ready(FRS_STATUS_WORD_RECEIVED));
         assert!(!is_write_ready(FRS_STATUS_BUSY));
         assert!(!is_write_ready(FRS_STATUS_RECORD_VALID));
