@@ -91,6 +91,11 @@ use std::{
 /// Type alias for sensor update callback functions
 type ReportCallbackMap<'a, SI> = HashMap<String, Box<dyn Fn(&BNO08x<'a, SI>) + 'a>>;
 
+/// Number of report slots tracked per driver. Sensor report IDs are `u8` and
+/// the BNO08x defines IDs well above this (its advertisement lists up to
+/// 0x2E), so every index derived from a report ID must be checked.
+const MAX_TRACKED_REPORTS: usize = 16;
+
 /// How many times `init` requests the product ID before giving up (I2C). A
 /// request written while the hub is still finishing its own startup can be
 /// dropped.
@@ -132,12 +137,18 @@ pub enum DriverError<E> {
     InvalidFWVersion(u8),
     /// Expected sensor data but none was available
     NoDataAvailable,
+    /// Report ID is outside the range this driver tracks
+    UnsupportedReport(u8),
 }
 
 impl<E: std::fmt::Debug> From<DriverError<E>> for io::Error {
     fn from(err: DriverError<E>) -> Self {
         match err {
             DriverError::CommError(e) => io::Error::other(format!("Communication error: {:?}", e)),
+            DriverError::UnsupportedReport(id) => io::Error::new(
+                ErrorKind::InvalidInput,
+                format!("Unsupported report ID: 0x{:X}", id),
+            ),
             DriverError::InvalidChipId(id) => {
                 io::Error::new(ErrorKind::InvalidData, format!("Invalid chip ID: {}", id))
             }
@@ -256,13 +267,13 @@ pub struct BNO08x<'a, SI> {
     mag_field: [f32; 3],
 
     /// Which reports are enabled
-    report_enabled: [bool; 16],
+    report_enabled: [bool; MAX_TRACKED_REPORTS],
 
     /// Timestamp of last update for each report
-    report_update_time: [u128; 16],
+    report_update_time: [u128; MAX_TRACKED_REPORTS],
 
     /// Callbacks for report updates
-    report_update_callbacks: [ReportCallbackMap<'a, SI>; 16],
+    report_update_callbacks: [ReportCallbackMap<'a, SI>; MAX_TRACKED_REPORTS],
 }
 
 impl<SI> BNO08x<'_, SI> {
@@ -295,8 +306,8 @@ impl<SI> BNO08x<'_, SI> {
             gyro: [0.0; 3],
             uncalib_gyro: [0.0; 3],
             mag_field: [0.0; 3],
-            report_enabled: [false; 16],
-            report_update_time: [0; 16],
+            report_enabled: [false; MAX_TRACKED_REPORTS],
+            report_update_time: [0; MAX_TRACKED_REPORTS],
             report_update_callbacks: std::array::from_fn(|_| HashMap::new()),
         }
     }
@@ -614,8 +625,11 @@ where
     }
 
     fn handle_sensor_report_update(&mut self, report_id: u8, timestamp: u128) {
-        self.report_update_time[report_id as usize] = timestamp;
-        for val in self.report_update_callbacks[report_id as usize].values() {
+        let Some(slot) = Self::report_slot(report_id) else {
+            return;
+        };
+        self.report_update_time[slot] = timestamp;
+        for val in self.report_update_callbacks[slot].values() {
             val(self);
         }
     }
@@ -869,7 +883,12 @@ where
                 }
                 SHUB_GET_FEATURE_RESP if avail > 1 => {
                     trace!("feat resp: {}", msg[1]);
-                    self.report_enabled[msg[1] as usize] = true;
+                    // The echoed report ID comes from the device and may name
+                    // a report this driver does not track.
+                    match Self::report_slot(msg[1]) {
+                        Some(slot) => self.report_enabled[slot] = true,
+                        None => trace!("feat resp for untracked report 0x{:X}", msg[1]),
+                    }
                 }
                 SHUB_FRS_WRITE_RESP if avail > 1 => {
                     trace!("write resp: {}", frs_status_to_str(msg[1]));
@@ -1107,37 +1126,65 @@ where
         self.enable_report(SENSOR_REPORTID_GRAVITY, millis_between_reports)
     }
 
-    /// Get the timestamp of the last update for a report
+    /// Map a report ID onto its tracking slot, if the driver tracks it.
+    ///
+    /// Report IDs arrive from the device and from callers, and the BNO08x
+    /// defines more of them than this driver tracks, so an unchecked index
+    /// would panic on data the sensor is entitled to send.
+    fn report_slot(report_id: u8) -> Option<usize> {
+        let slot = report_id as usize;
+        (slot < MAX_TRACKED_REPORTS).then_some(slot)
+    }
+
+    /// Get the timestamp of the last update for a report.
+    ///
+    /// Returns 0 for a report this driver does not track.
     pub fn report_update_time(&self, report_id: u8) -> u128 {
-        if report_id as usize <= self.report_enabled.len() {
-            return self.report_update_time[report_id as usize];
+        match Self::report_slot(report_id) {
+            Some(slot) => self.report_update_time[slot],
+            None => 0,
         }
-        0
     }
 
-    /// Check if a report is enabled
+    /// Check if a report is enabled.
+    ///
+    /// Returns false for a report this driver does not track.
     pub fn is_report_enabled(&self, report_id: u8) -> bool {
-        if (report_id as usize) < self.report_enabled.len() {
-            return self.report_enabled[report_id as usize];
+        match Self::report_slot(report_id) {
+            Some(slot) => self.report_enabled[slot],
+            None => false,
         }
-        false
     }
 
-    /// Add a callback to be invoked when a sensor report is updated
+    /// Add a callback to be invoked when a sensor report is updated.
+    ///
+    /// A report ID this driver does not track is rejected with a warning and
+    /// no callback is registered.
     pub fn add_sensor_report_callback(
         &mut self,
         report_id: u8,
         key: String,
         func: impl Fn(&Self) + 'a,
     ) {
-        self.report_update_callbacks[report_id as usize]
+        let Some(slot) = Self::report_slot(report_id) else {
+            warn!(
+                "Ignoring callback for untracked report ID 0x{:X}",
+                report_id
+            );
+            return;
+        };
+        self.report_update_callbacks[slot]
             .entry(key)
             .or_insert_with(|| Box::new(func));
     }
 
-    /// Remove a sensor report callback by key
+    /// Remove a sensor report callback by key.
+    ///
+    /// Does nothing for a report this driver does not track.
     pub fn remove_sensor_report_callback(&mut self, report_id: u8, key: String) {
-        self.report_update_callbacks[report_id as usize].remove(&key);
+        if let Some(slot) = Self::report_slot(report_id) {
+            self.report_update_callbacks[slot].remove(&key);
+        }
     }
 
     /// Enable a sensor report with the specified update interval.
@@ -1149,6 +1196,7 @@ where
         millis_between_reports: u16,
     ) -> Result<bool, DriverError<SE>> {
         trace!("enable_report 0x{:X}", report_id);
+        let slot = Self::report_slot(report_id).ok_or(DriverError::UnsupportedReport(report_id))?;
 
         let micros_between_reports: u32 = (millis_between_reports as u32) * 1000;
         let cmd_body: [u8; 17] = [
@@ -1173,7 +1221,7 @@ where
         self.send_packet(CHANNEL_HUB_CONTROL, &cmd_body)?;
 
         let start = Instant::now();
-        while !self.report_enabled[report_id as usize] && start.elapsed().as_millis() < 2000 {
+        while !self.report_enabled[slot] && start.elapsed().as_millis() < 2000 {
             if let Ok(received_len) = self.receive_packet_with_timeout(250) {
                 if received_len > 0 {
                     if let Err(e) = self.handle_received_packet(received_len) {
@@ -1185,12 +1233,9 @@ where
         trace!(
             "Report {:x} is enabled: {}",
             report_id,
-            self.report_enabled[report_id as usize]
+            self.report_enabled[slot]
         );
-        if !self.report_enabled[report_id as usize] {
-            return Ok(false);
-        }
-        Ok(true)
+        Ok(self.report_enabled[slot])
     }
 
     /// Wait for FRS write status to change from NO_DATA.
@@ -2391,6 +2436,58 @@ mod tests {
 
         assert!(driver.handle_received_packet(len).is_ok());
         assert!(driver.prod_id_verified);
+    }
+
+    #[test]
+    fn test_report_accessors_reject_untracked_ids() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        // Report IDs are u8 and the BNO08x defines more of them than the
+        // driver tracks, so every one of these must answer rather than panic.
+        for id in [MAX_TRACKED_REPORTS as u8, 0x28, u8::MAX] {
+            assert!(!driver.is_report_enabled(id));
+            assert_eq!(driver.report_update_time(id), 0);
+            driver.add_sensor_report_callback(id, "cb".to_string(), |_| {});
+            driver.remove_sensor_report_callback(id, "cb".to_string());
+        }
+    }
+
+    #[test]
+    fn test_enable_report_rejects_untracked_id() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        match driver.enable_report(0x28, 100) {
+            Err(DriverError::UnsupportedReport(0x28)) => {}
+            other => panic!("expected UnsupportedReport, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_unsupported_report_to_io_error() {
+        let err: DriverError<&str> = DriverError::UnsupportedReport(0x28);
+        let io_err: io::Error = err.into();
+        assert_eq!(io_err.kind(), ErrorKind::InvalidInput);
+        assert!(io_err.to_string().contains("Unsupported report ID"));
+    }
+
+    #[test]
+    fn test_hub_control_feature_resp_for_untracked_report_is_ignored() {
+        let mock = MockSensorInterface::new();
+        let mut driver: BNO08x<MockSensorInterface> = BNO08x::new_with_interface(mock);
+
+        // A get-feature response naming a report the driver does not track
+        // must not index past the tracking arrays.
+        let len = PACKET_HEADER_LENGTH + 17;
+        driver.packet_recv_buf[..len].fill(0);
+        driver.packet_recv_buf[0] = len as u8;
+        driver.packet_recv_buf[2] = CHANNEL_HUB_CONTROL;
+        driver.packet_recv_buf[4] = SHUB_GET_FEATURE_RESP;
+        driver.packet_recv_buf[5] = 0x2E;
+
+        assert!(driver.handle_received_packet(len).is_ok());
+        assert!(!driver.is_report_enabled(0x2E));
     }
 
     #[test]

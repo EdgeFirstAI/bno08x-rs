@@ -60,28 +60,27 @@ impl SpiDevice {
             rx_buf: [0; PACKET_RECV_BUF_LEN],
         })
     }
+}
 
-    fn check_len(&self, len: usize, what: &str) -> io::Result<()> {
-        if len > self.rx_buf.len() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "{} of {} bytes exceeds buffer of {}",
-                    what,
-                    len,
-                    self.rx_buf.len()
-                ),
-            ));
-        }
-        Ok(())
+/// Reject a transfer that would not fit the scratch receive buffer.
+///
+/// Split out from [`SpiDevice`] so the bound can be exercised without a real
+/// SPI device.
+fn check_len(len: usize, capacity: usize, what: &str) -> io::Result<()> {
+    if len > capacity {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} of {} bytes exceeds buffer of {}", what, len, capacity),
+        ));
     }
+    Ok(())
 }
 
 impl Transfer for SpiDevice {
     type Error = io::Error;
 
     fn transfer<'a>(&'a mut self, words: &'a mut [u8]) -> Result<&'a [u8], Self::Error> {
-        self.check_len(words.len(), "transfer")?;
+        check_len(words.len(), self.rx_buf.len(), "transfer")?;
         let buf = &mut self.rx_buf[..words.len()];
         trace!("Transfer write: {:?}", words);
         let mut transfer = SpidevTransfer::read_write(words, buf);
@@ -96,12 +95,38 @@ impl Write for SpiDevice {
     type Error = io::Error;
 
     fn write(&mut self, words: &[u8]) -> Result<(), Self::Error> {
-        self.check_len(words.len(), "write")?;
+        check_len(words.len(), self.rx_buf.len(), "write")?;
         trace!("Write: {:?}", words);
         let buf = &mut self.rx_buf[..words.len()];
         let mut transfer = SpidevTransfer::read_write(words, buf);
         self.spi.transfer(&mut transfer)?;
         trace!("Write read: {:?}", buf);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_speed_is_within_the_part_limit() {
+        // The BNO08x tops out at 3 MHz.
+        const _: () = assert!(DEFAULT_SPI_SPEED_HZ <= 3_000_000);
+    }
+
+    #[test]
+    fn check_len_accepts_a_transfer_that_fits() {
+        assert!(check_len(0, PACKET_RECV_BUF_LEN, "transfer").is_ok());
+        assert!(check_len(PACKET_RECV_BUF_LEN, PACKET_RECV_BUF_LEN, "transfer").is_ok());
+    }
+
+    #[test]
+    fn check_len_rejects_a_transfer_that_does_not_fit() {
+        let err = check_len(PACKET_RECV_BUF_LEN + 1, PACKET_RECV_BUF_LEN, "write")
+            .expect_err("oversized transfer must be rejected");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("write"));
+        assert!(err.to_string().contains("exceeds buffer"));
     }
 }

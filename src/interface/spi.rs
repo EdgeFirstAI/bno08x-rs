@@ -226,6 +226,20 @@ where
         send_buf: &[u8],
         recv_buf: &mut [u8],
     ) -> Result<usize, Self::SensorError> {
+        // The outgoing packet is copied into the receive buffer to be clocked
+        // out, so it must fit before anything is written there.
+        if send_buf.len() > recv_buf.len() {
+            error!(
+                "Send buffer length ({}) greater than receive buffer size ({})",
+                send_buf.len(),
+                recv_buf.len()
+            );
+            return Err(BufferOverflow {
+                packet_size: send_buf.len(),
+                buffer_size: recv_buf.len(),
+            });
+        }
+
         if !self.wait_for_hintn(WRITE_READY_TIMEOUT) {
             error!("Sensor not ready (H_INTN idle) - write would be lost");
             return Err(NoDataAvailable);
@@ -235,8 +249,6 @@ where
         // clocks enough bytes to receive all of it.
         let pending_len = self.read_header(recv_buf)?;
 
-        recv_buf.fill(0);
-        recv_buf[..send_buf.len()].copy_from_slice(send_buf);
         let total_packet_len = std::cmp::max(pending_len, send_buf.len());
         if total_packet_len > recv_buf.len() {
             error!(
@@ -249,6 +261,9 @@ where
                 buffer_size: recv_buf.len(),
             });
         }
+
+        recv_buf.fill(0);
+        recv_buf[..send_buf.len()].copy_from_slice(send_buf);
 
         if pending_len > 0 {
             self.wait_for_continuation();
@@ -318,5 +333,360 @@ where
             return self.read_packet(recv_buf);
         }
         Ok(0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    };
+
+    #[derive(Debug, PartialEq)]
+    struct MockCommError;
+
+    #[derive(Debug, PartialEq)]
+    struct MockPinError;
+
+    /// SPI stub that replays canned responses and records what was clocked out.
+    #[derive(Default)]
+    struct MockSpi {
+        /// Bytes returned by successive `transfer` calls.
+        responses: Vec<Vec<u8>>,
+        /// What each `transfer`/`write` call sent.
+        sent: Vec<Vec<u8>>,
+        fail: bool,
+    }
+
+    impl MockSpi {
+        fn with_responses(responses: Vec<Vec<u8>>) -> Self {
+            Self {
+                responses,
+                ..Default::default()
+            }
+        }
+
+        fn failing() -> Self {
+            Self {
+                fail: true,
+                ..Default::default()
+            }
+        }
+    }
+
+    impl Transfer for MockSpi {
+        type Error = MockCommError;
+
+        fn transfer<'a>(&'a mut self, words: &'a mut [u8]) -> Result<&'a [u8], Self::Error> {
+            if self.fail {
+                return Err(MockCommError);
+            }
+            self.sent.push(words.to_vec());
+            if !self.responses.is_empty() {
+                let response = self.responses.remove(0);
+                let n = response.len().min(words.len());
+                words[..n].copy_from_slice(&response[..n]);
+            }
+            Ok(words)
+        }
+    }
+
+    impl Write for MockSpi {
+        type Error = MockCommError;
+
+        fn write(&mut self, words: &[u8]) -> Result<(), Self::Error> {
+            if self.fail {
+                return Err(MockCommError);
+            }
+            self.sent.push(words.to_vec());
+            Ok(())
+        }
+    }
+
+    /// Interrupt line whose level the test controls. Active low, so
+    /// `asserted == true` means the sensor wants attention.
+    #[derive(Clone)]
+    struct MockHintn {
+        asserted: Arc<AtomicBool>,
+        /// Flip to the opposite level after this many reads (0 = never).
+        flip_after: Arc<AtomicUsize>,
+        reads: Arc<AtomicUsize>,
+    }
+
+    impl MockHintn {
+        fn new(asserted: bool) -> Self {
+            Self {
+                asserted: Arc::new(AtomicBool::new(asserted)),
+                flip_after: Arc::new(AtomicUsize::new(0)),
+                reads: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+
+        /// Start at `asserted` and flip once `after` reads have happened.
+        fn flipping(asserted: bool, after: usize) -> Self {
+            let pin = Self::new(asserted);
+            pin.flip_after.store(after, Ordering::SeqCst);
+            pin
+        }
+    }
+
+    impl InputPin for MockHintn {
+        type Error = MockPinError;
+
+        fn is_high(&self) -> Result<bool, Self::Error> {
+            Ok(!self.is_low()?)
+        }
+
+        fn is_low(&self) -> Result<bool, Self::Error> {
+            let n = self.reads.fetch_add(1, Ordering::SeqCst) + 1;
+            let flip_after = self.flip_after.load(Ordering::SeqCst);
+            if flip_after > 0 && n == flip_after {
+                let current = self.asserted.load(Ordering::SeqCst);
+                self.asserted.store(!current, Ordering::SeqCst);
+            }
+            Ok(self.asserted.load(Ordering::SeqCst))
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct MockReset {
+        transitions: Arc<std::sync::Mutex<Vec<bool>>>,
+    }
+
+    impl OutputPin for MockReset {
+        type Error = MockPinError;
+
+        fn set_low(&mut self) -> Result<(), Self::Error> {
+            self.transitions.lock().unwrap().push(false);
+            Ok(())
+        }
+
+        fn set_high(&mut self) -> Result<(), Self::Error> {
+            self.transitions.lock().unwrap().push(true);
+            Ok(())
+        }
+    }
+
+    fn interface(
+        spi: MockSpi,
+        hintn: MockHintn,
+        reset: MockReset,
+    ) -> SpiInterface<MockSpi, MockHintn, MockReset> {
+        SpiInterface::new(SpiControlLines { spi, hintn, reset })
+    }
+
+    /// A valid 20-byte SHTP packet on the hub control channel.
+    fn packet(len: usize) -> Vec<u8> {
+        let mut p = vec![0u8; len];
+        p[0] = len as u8;
+        p[2] = 2;
+        p
+    }
+
+    #[test]
+    fn spi_never_requires_soft_reset() {
+        let iface = interface(
+            MockSpi::default(),
+            MockHintn::new(true),
+            MockReset::default(),
+        );
+        assert!(!iface.requires_soft_reset());
+    }
+
+    #[test]
+    fn setup_pulses_reset_and_waits_for_sensor() {
+        // High while booting, then asserted: the sequence a live sensor gives.
+        let hintn = MockHintn::flipping(false, 2);
+        let reset = MockReset::default();
+        let mut iface = interface(MockSpi::default(), hintn, reset.clone());
+
+        assert!(iface.setup().is_ok());
+        // High to deassert, low for the pulse, high again to release.
+        assert_eq!(*reset.transitions.lock().unwrap(), vec![true, false, true]);
+    }
+
+    #[test]
+    fn setup_reports_unresponsive_when_hintn_never_asserts() {
+        // Sensor drives the line high and never asks for attention.
+        let mut iface = interface(
+            MockSpi::default(),
+            MockHintn::new(false),
+            MockReset::default(),
+        );
+        assert!(matches!(iface.setup(), Err(SensorUnresponsive)));
+    }
+
+    #[test]
+    fn write_is_rejected_when_sensor_is_idle() {
+        // A sleeping hub silently discards writes, so the interface must
+        // refuse rather than report success.
+        let mut iface = interface(
+            MockSpi::default(),
+            MockHintn::new(false),
+            MockReset::default(),
+        );
+        let mut recv = vec![0u8; 64];
+        assert!(matches!(
+            iface.send_and_receive_packet(&[1, 2, 3, 4], &mut recv),
+            Err(NoDataAvailable)
+        ));
+        assert!(matches!(
+            iface.write_packet(&[1, 2, 3, 4]),
+            Err(NoDataAvailable)
+        ));
+    }
+
+    #[test]
+    fn write_packet_reaches_the_bus_when_sensor_is_ready() {
+        let mut iface = interface(
+            MockSpi::default(),
+            MockHintn::new(true),
+            MockReset::default(),
+        );
+        assert!(iface.write_packet(&[9, 8, 7]).is_ok());
+        assert_eq!(iface.spi.sent, vec![vec![9, 8, 7]]);
+    }
+
+    #[test]
+    fn send_and_receive_rejects_send_buffer_larger_than_receive_buffer() {
+        let mut iface = interface(
+            MockSpi::default(),
+            MockHintn::new(true),
+            MockReset::default(),
+        );
+        let mut recv = vec![0u8; 4];
+        assert!(matches!(
+            iface.send_and_receive_packet(&[0; 16], &mut recv),
+            Err(BufferOverflow {
+                packet_size: 16,
+                buffer_size: 4
+            })
+        ));
+    }
+
+    #[test]
+    fn send_and_receive_rejects_pending_packet_larger_than_receive_buffer() {
+        // Header announces 200 bytes but the caller offered 64.
+        let mut header = vec![0u8; 8];
+        header[0] = 200;
+        let mut iface = interface(
+            MockSpi::with_responses(vec![header]),
+            MockHintn::new(true),
+            MockReset::default(),
+        );
+        let mut recv = vec![0u8; 64];
+        assert!(matches!(
+            iface.send_and_receive_packet(&[1, 2, 3, 4], &mut recv),
+            Err(BufferOverflow {
+                packet_size: 200,
+                buffer_size: 64
+            })
+        ));
+    }
+
+    #[test]
+    fn send_and_receive_clocks_out_the_send_buffer() {
+        let mut iface = interface(
+            MockSpi::with_responses(vec![packet(20), packet(20)]),
+            MockHintn::new(true),
+            MockReset::default(),
+        );
+        let mut recv = vec![0u8; 64];
+        let len = iface
+            .send_and_receive_packet(&[6, 0, 2, 0, 0xF9, 0], &mut recv)
+            .expect("send succeeds");
+        assert_eq!(len, 20);
+        // Second transfer carries the caller's packet, padded to the pending
+        // packet length so the whole response is clocked in.
+        let second = &iface.spi.sent[1];
+        assert_eq!(&second[..6], &[6, 0, 2, 0, 0xF9, 0]);
+        assert_eq!(second.len(), 20);
+    }
+
+    #[test]
+    fn send_and_receive_propagates_comm_errors() {
+        let mut iface = interface(
+            MockSpi::failing(),
+            MockHintn::new(true),
+            MockReset::default(),
+        );
+        let mut recv = vec![0u8; 64];
+        assert!(matches!(
+            iface.send_and_receive_packet(&[1, 2, 3, 4], &mut recv),
+            Err(Error::Comm(MockCommError))
+        ));
+    }
+
+    #[test]
+    fn read_packet_requires_an_asserted_interrupt() {
+        let mut iface = interface(
+            MockSpi::default(),
+            MockHintn::new(false),
+            MockReset::default(),
+        );
+        let mut recv = vec![0u8; 64];
+        assert!(matches!(iface.read_packet(&mut recv), Err(NoDataAvailable)));
+    }
+
+    #[test]
+    fn read_packet_ignores_an_idle_sensor() {
+        // An awake but idle hub answers with a zero-length header.
+        let mut iface = interface(
+            MockSpi::with_responses(vec![vec![0, 0, 0, 0]]),
+            MockHintn::new(true),
+            MockReset::default(),
+        );
+        let mut recv = vec![0u8; 64];
+        assert_eq!(iface.read_packet(&mut recv).expect("no error"), 0);
+    }
+
+    #[test]
+    fn read_packet_ignores_a_header_only_packet() {
+        let mut iface = interface(
+            MockSpi::with_responses(vec![vec![4, 0, 2, 0]]),
+            MockHintn::new(true),
+            MockReset::default(),
+        );
+        let mut recv = vec![0u8; 64];
+        assert_eq!(iface.read_packet(&mut recv).expect("no error"), 0);
+    }
+
+    #[test]
+    fn read_packet_returns_the_full_packet() {
+        let mut iface = interface(
+            MockSpi::with_responses(vec![packet(20), packet(20)]),
+            MockHintn::new(true),
+            MockReset::default(),
+        );
+        let mut recv = vec![0u8; 64];
+        assert_eq!(iface.read_packet(&mut recv).expect("no error"), 20);
+        assert_eq!(recv[0], 20);
+    }
+
+    #[test]
+    fn read_with_timeout_returns_zero_when_nothing_arrives() {
+        let mut iface = interface(
+            MockSpi::default(),
+            MockHintn::new(false),
+            MockReset::default(),
+        );
+        let mut recv = vec![0u8; 64];
+        assert_eq!(iface.read_with_timeout(&mut recv, 1).expect("no error"), 0);
+    }
+
+    #[test]
+    fn read_with_timeout_reads_once_the_sensor_signals() {
+        let mut iface = interface(
+            MockSpi::with_responses(vec![packet(20), packet(20)]),
+            MockHintn::new(true),
+            MockReset::default(),
+        );
+        let mut recv = vec![0u8; 64];
+        assert_eq!(
+            iface.read_with_timeout(&mut recv, 10).expect("no error"),
+            20
+        );
     }
 }

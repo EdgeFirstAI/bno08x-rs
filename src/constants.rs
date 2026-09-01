@@ -322,9 +322,8 @@ mod tests {
 
     #[test]
     fn test_buffer_sizes() {
-        // Verify buffer sizes are reasonable - constants are verified at
-        // compile time These values are known to be positive and
-        // correctly sized
+        // Verify buffer sizes are reasonable. These constants are checked at
+        // compile time to be positive and correctly sized.
         const _: () = assert!(PACKET_SEND_BUF_LEN > 0);
         const _: () = assert!(PACKET_RECV_BUF_LEN > 0);
         const _: () = assert!(PACKET_RECV_BUF_LEN >= PACKET_SEND_BUF_LEN);

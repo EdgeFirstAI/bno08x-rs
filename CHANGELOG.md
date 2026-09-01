@@ -35,11 +35,16 @@ change the same device ran a ten-minute soak with zero restarts.
   `NoDataAvailable` rather than appearing to succeed. Code that ignored write
   results will start seeing errors it previously never saw — those writes were
   being discarded by the hardware all along.
+- `enable_report()` now returns `DriverError::UnsupportedReport` for a report
+  ID this driver does not track, where it previously panicked. `DriverError`
+  gains that variant, so exhaustive matches on it need a new arm.
 
 ### Added
 
 - `BNO08x::product_id_verified()` reports whether a product ID response has
   been received since the last reset.
+- `DriverError::UnsupportedReport(u8)` for report IDs outside the range the
+  driver tracks.
 - `SpiDevice::new_with_speed()` and `DEFAULT_SPI_SPEED_HZ` for callers that
   need a different SPI clock.
 
@@ -70,7 +75,16 @@ change the same device ran a ten-minute soak with zero restarts.
   get-feature response) into one SHTP packet, and only the first report used
   to be seen, so `enable_report()` could miss its own acknowledgement
   (EDGEAI-1100)
+- Report IDs from the device and from callers are bounds-checked everywhere
+  they index the driver's tracking arrays. Those arrays hold 16 entries while
+  report IDs are a `u8`, and the sensor's own advertisement lists IDs up to
+  0x2E, so `enable_report()`, `report_update_time()`,
+  `add_sensor_report_callback()`, `remove_sensor_report_callback()` and the
+  handler for a get-feature response could all panic on a report ID the driver
+  does not track — reachable from a corrupted read as well as from valid data
 - `is_report_enabled()` off-by-one bounds check
+- `send_and_receive_packet()` checks that the outgoing packet fits the receive
+  buffer before copying into it, rather than after
 
 ### Changed
 
