@@ -45,7 +45,7 @@ jobs:
         run: |
           python3 -m venv venv
           venv/bin/pip install --upgrade pip
-          venv/bin/pip install scancode-toolkit
+          venv/bin/pip install scancode-toolkit pluggy==1.6.0
 
       - name: Install CycloneDX CLI
         run: |
