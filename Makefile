@@ -85,7 +85,7 @@ sbom:
 	@if [ ! -f "venv/bin/scancode" ]; then \
 		echo "ERROR: scancode not found. Please install:"; \
 		echo "  python3 -m venv venv"; \
-		echo "  venv/bin/pip install scancode-toolkit"; \
+		echo "  venv/bin/pip install scancode-toolkit pluggy==1.6.0"; \
 		exit 1; \
 	fi
 	@if ! cargo cyclonedx --version >/dev/null 2>&1; then \
